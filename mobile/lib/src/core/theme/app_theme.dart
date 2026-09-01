@@ -67,6 +67,42 @@ class AppTheme {
           ),
         ),
       ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: AppColors.paper000,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.space2,
+          vertical: AppSpacing.space2,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: const BorderSide(color: AppColors.ink600, width: 1.0),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: BorderSide(
+            color: AppColors.ink600.withValues(alpha: 0.5),
+            width: 1.0,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: const BorderSide(color: AppColors.brass500, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: const BorderSide(color: AppColors.verdictFail, width: 1.0),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          borderSide: const BorderSide(color: AppColors.verdictFail, width: 1.5),
+        ),
+        labelStyle: AppTypography.xs.copyWith(color: AppColors.ink600),
+        hintStyle: AppTypography.base.copyWith(
+          color: AppColors.ink600.withValues(alpha: 0.5),
+        ),
+        errorStyle: AppTypography.xs.copyWith(color: AppColors.verdictFail),
+      ),
       textTheme: const TextTheme(
         displayLarge: AppTypography.display4xl,
         displayMedium: AppTypography.display3xl,

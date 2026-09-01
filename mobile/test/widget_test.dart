@@ -4,6 +4,7 @@ import 'package:mobile/main.dart';
 void main() {
   testWidgets('MetrologyApp smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const MetrologyApp());
-    expect(find.text('MetrologyAI — Field LMO'), findsOneWidget);
+    expect(find.text('MetrologyAI Mobile'), findsOneWidget);
+    expect(find.text('AUTHENTICATE & ENTER FIELD MODE'), findsOneWidget);
   });
 }
