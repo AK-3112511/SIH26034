@@ -97,7 +97,10 @@ void main() {
       );
 
       await tester.tap(find.text('AUTHENTICATE & ENTER FIELD MODE'));
-      await tester.pumpAndSettle();
+      // Use bounded pump instead of pumpAndSettle — HomeScreen's DB init is async
+      // and would cause pumpAndSettle to wait indefinitely in the test host environment.
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
 
       // Should have navigated to HomeScreen
       expect(find.byType(HomeScreen), findsOneWidget);

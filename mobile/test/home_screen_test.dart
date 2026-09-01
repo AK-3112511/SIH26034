@@ -97,15 +97,21 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.lightTheme,
-          home: const HomeScreen(),
+          home: const HomeScreen(initialCaptures: []),
         ),
       );
+
+      // First pump to settle the initial state
+      await tester.pumpAndSettle();
 
       // Find and tap logout button on AppBar
       final logoutButton = find.byIcon(Icons.logout);
       expect(logoutButton, findsOneWidget);
 
       await tester.tap(logoutButton);
+      // pump multiple frames to allow the async logout() + navigation to complete
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpAndSettle();
 
       expect(find.byType(LoginScreen), findsOneWidget);
