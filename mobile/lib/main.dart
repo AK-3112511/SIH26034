@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'src/core/theme/app_theme.dart';
 import 'src/features/auth/presentation/login_screen.dart';
+import 'src/features/scans/services/sync_worker.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SyncWorker().initializeWorkManager();
   runApp(const MetrologyApp());
 }
 

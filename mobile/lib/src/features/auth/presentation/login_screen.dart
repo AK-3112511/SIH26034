@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/api_constants.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/widgets/calibration_tick_rule.dart';
 import '../../scans/presentation/home_screen.dart';
@@ -43,6 +44,68 @@ class _LoginScreenState extends State<LoginScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  void _handleOfflineLogin() {
+    _auth.loginOffline(username: _usernameController.text);
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => const HomeScreen(),
+      ),
+    );
+  }
+
+  void _showServerConfigDialog() {
+    final urlController = TextEditingController(text: ApiConstants.baseUrl);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.paper000,
+        title: const Text('Backend Server Endpoint', style: AppTypography.lg),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Specify the base API URL (e.g. for USB adb reverse, emulator, or local network):',
+              style: AppTypography.xs.copyWith(color: AppColors.ink600),
+            ),
+            const SizedBox(height: AppSpacing.space2),
+            TextField(
+              controller: urlController,
+              style: AppTypography.base.copyWith(color: AppColors.ink900),
+              decoration: const InputDecoration(
+                labelText: 'API BASE URL',
+                hintText: 'http://127.0.0.1:8000/api/v1',
+              ),
+            ),
+            const SizedBox(height: AppSpacing.space1),
+            Text(
+              'USB Device: Run "adb reverse tcp:8000 tcp:8000"\nEmulator: Use "http://10.0.2.2:8000/api/v1"',
+              style: AppTypography.dataMono.copyWith(fontSize: 11.0, color: AppColors.ink600),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCEL'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size(100, 40),
+            ),
+            onPressed: () {
+              setState(() {
+                ApiConstants.baseUrl = urlController.text.trim();
+              });
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('SAVE'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _handleLogin() async {
@@ -136,6 +199,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                     ),
+                    IconButton(
+                      tooltip: 'Server Connection Settings',
+                      icon: const Icon(
+                        Icons.settings_ethernet,
+                        color: AppColors.ink600,
+                        size: 22.0,
+                      ),
+                      onPressed: _showServerConfigDialog,
+                    ),
                   ],
                 ),
 
@@ -178,15 +250,33 @@ class _LoginScreenState extends State<LoginScreen> {
                                 'OFFLINE MODE NOTICE',
                                 style: AppTypography.xs.copyWith(
                                   color: AppColors.verdictPending,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
                               const SizedBox(height: AppSpacing.space05),
                               Text(
-                                'Central authentication server is currently unreachable. Check your network or server configuration.',
+                                'Central server is unreachable. You can continue field inspection in offline mode.',
                                 style: AppTypography.xs.copyWith(
                                   color: AppColors.ink900,
                                 ),
+                              ),
+                              const SizedBox(height: AppSpacing.space1),
+                              OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.verdictPending,
+                                  side: const BorderSide(color: AppColors.verdictPending),
+                                  minimumSize: const Size(160, 36),
+                                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space1),
+                                ),
+                                icon: const Icon(Icons.offline_bolt_outlined, size: 16.0),
+                                label: Text(
+                                  'ENTER OFFLINE FIELD MODE',
+                                  style: AppTypography.xs.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.verdictPending,
+                                  ),
+                                ),
+                                onPressed: _handleOfflineLogin,
                               ),
                             ],
                           ),
@@ -346,6 +436,31 @@ class _LoginScreenState extends State<LoginScreen> {
                                 )
                               : const Text('AUTHENTICATE & ENTER FIELD MODE'),
                         ),
+
+                        // Offline fallback button when server connection fails
+                        if (_showOfflineNotice || _errorMessage != null) ...[
+                          const SizedBox(height: AppSpacing.space2),
+                          OutlinedButton.icon(
+                            icon: const Icon(
+                              Icons.offline_bolt_outlined,
+                              color: AppColors.verdictPending,
+                            ),
+                            label: Text(
+                              'CONTINUE IN OFFLINE FIELD MODE',
+                              style: AppTypography.base.copyWith(
+                                color: AppColors.ink900,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(
+                                color: AppColors.verdictPending,
+                                width: 1.5,
+                              ),
+                            ),
+                            onPressed: _handleOfflineLogin,
+                          ),
+                        ],
                       ],
                     ),
                   ),

@@ -1,19 +1,10 @@
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart';
-
 class ApiConstants {
   ApiConstants._();
 
-  /// Default host detection: Android emulator routes 10.0.2.2 to host machine localhost,
-  /// desktop and other targets use 127.0.0.1.
-  static String get defaultBaseUrl {
-    if (!kIsWeb && Platform.isAndroid) {
-      return 'http://10.0.2.2:8000/api/v1';
-    }
-    return 'http://127.0.0.1:8000/api/v1';
-  }
+  /// Default host: 127.0.0.1:8000 (compatible with adb reverse on USB devices and local development)
+  static const String defaultBaseUrl = 'http://127.0.0.1:8000/api/v1';
 
-  /// Mutable base URL override (e.g. for testing against remote backend or custom host)
+  /// Mutable base URL override (e.g. for testing against remote backend, emulator 10.0.2.2, or LAN IP)
   static String baseUrl = defaultBaseUrl;
 
   static String get loginEndpoint => '$baseUrl/auth/login';

@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import '../../../core/database/database_helper.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/widgets/calibration_tick_rule.dart';
 import '../../../core/widgets/status_chip.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/presentation/login_screen.dart';
+import '../../capture/presentation/capture_screen.dart';
+import '../../notifications/presentation/notifications_screen.dart';
 import '../models/capture_item.dart';
+import '../models/capture_record.dart';
+import '../services/sync_worker.dart';
+import 'sync_queue_screen.dart';
 
 /// Home / Today's Scans Screen (Mobile UX §2, Screen 2)
 ///
@@ -26,12 +32,89 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late List<CaptureItem> _captures;
   bool _showingMockData = false;
+  late final SyncWorker _syncWorker;
+  int _stuckCount = 0;
 
   @override
   void initState() {
     super.initState();
-    // Default is empty as specified: "Home screen data can be mocked/empty for now since no captures exist yet"
     _captures = widget.initialCaptures ?? [];
+    _syncWorker = SyncWorker();
+    _syncWorker.addListener(_onSyncWorkerUpdate);
+
+    if (widget.initialCaptures == null) {
+      _loadCapturesFromDb();
+    }
+  }
+
+  @override
+  void dispose() {
+    _syncWorker.removeListener(_onSyncWorkerUpdate);
+    super.dispose();
+  }
+
+  void _onSyncWorkerUpdate() {
+    if (!_showingMockData && mounted) {
+      _loadCapturesFromDb();
+    }
+  }
+
+  Future<void> _loadCapturesFromDb() async {
+    try {
+      final records = await DatabaseHelper().getAllCaptures();
+      if (!mounted) return;
+
+      final stuck = records.where((r) => r.retryCount > 10).length;
+
+      setState(() {
+        _captures = records.map((r) => _recordToItem(r)).toList();
+        _stuckCount = stuck;
+      });
+    } catch (e) {
+      debugPrint('Error loading captures from SQLite: $e');
+    }
+  }
+
+  void _openSyncQueue() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const SyncQueueScreen(),
+      ),
+    ).then((_) => _loadCapturesFromDb());
+  }
+
+  void _openNotifications() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const NotificationsScreen(),
+      ),
+    );
+  }
+
+  CaptureItem _recordToItem(CaptureRecord r) {
+    DateTime parsedTime;
+    try {
+      parsedTime = DateTime.parse(r.capturedAtUtc).toLocal();
+    } catch (_) {
+      parsedTime = DateTime.now();
+    }
+
+    final idDisplay = r.serverScanId != null && r.serverScanId!.isNotEmpty
+        ? 'SCAN-${r.serverScanId!.substring(0, 8).toUpperCase()}'
+        : 'LOC-${r.localId.substring(0, 8).toUpperCase()}';
+
+    final locationDisplay = r.lat != null && r.lng != null
+        ? 'GPS: ${r.lat!.toStringAsFixed(4)}, ${r.lng!.toStringAsFixed(4)}'
+        : 'Active Field Inspection Site';
+
+    return CaptureItem(
+      id: idDisplay,
+      productName: 'Field Inspection Item (${r.referenceObjectType.toUpperCase()})',
+      category: '${r.referenceObjectType.toUpperCase()} Package',
+      timestamp: parsedTime,
+      location: locationDisplay,
+      syncStatus: r.toUiSyncStatus,
+    );
   }
 
   void _toggleDataMode() {
@@ -40,13 +123,19 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_showingMockData) {
         _captures = CaptureItem.mockItems();
       } else {
-        _captures = [];
+        if (widget.initialCaptures != null) {
+          _captures = List.from(widget.initialCaptures!);
+        } else {
+          _captures = [];
+          _loadCapturesFromDb();
+        }
       }
     });
   }
 
-  void _handleLogout() {
-    AuthService().logout();
+  Future<void> _handleLogout() async {
+    await AuthService().logout();
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => const LoginScreen(),
@@ -54,25 +143,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _handleNewScan() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.ink900,
-        content: Row(
-          children: [
-            const Icon(Icons.camera_alt_outlined, color: AppColors.brass500, size: 20),
-            const SizedBox(width: AppSpacing.space1),
-            Expanded(
-              child: Text(
-                'Phase 2.2: AR Guide Capture & Reference Card Detection queued.',
-                style: AppTypography.xs.copyWith(color: AppColors.paper000),
-              ),
-            ),
-          ],
-        ),
-        duration: const Duration(seconds: 2),
+
+
+
+
+  Future<void> _handleNewScan() async {
+    await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => const CaptureScreen(),
       ),
     );
+
+    if (mounted) {
+      _loadCapturesFromDb();
+    }
   }
 
   @override
@@ -91,6 +175,16 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('MetrologyAI — Field LMO'),
         actions: [
           IconButton(
+            tooltip: 'Sync Queue',
+            icon: const Icon(Icons.cloud_sync_outlined, color: AppColors.paper000),
+            onPressed: _openSyncQueue,
+          ),
+          IconButton(
+            tooltip: 'Notifications',
+            icon: const Icon(Icons.notifications_outlined, color: AppColors.paper000),
+            onPressed: _openNotifications,
+          ),
+          IconButton(
             tooltip: 'Logout',
             icon: const Icon(Icons.logout, color: AppColors.paper000),
             onPressed: _handleLogout,
@@ -105,6 +199,53 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(AppConstraints.mobileScreenMargin),
                 children: [
+                  // Stuck Captures Alert Banner (§3.1: notify_user("photo stuck, check manually"))
+                  if (_stuckCount > 0) ...[
+                    InkWell(
+                      onTap: _openSyncQueue,
+                      borderRadius: BorderRadius.circular(AppRadius.card),
+                      child: Container(
+                        padding: const EdgeInsets.all(AppSpacing.space2),
+                        decoration: BoxDecoration(
+                          color: AppColors.paper000,
+                          borderRadius: BorderRadius.circular(AppRadius.card),
+                          border: Border.all(color: AppColors.verdictPending, width: 1.5),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              color: AppColors.verdictPending,
+                              size: 22.0,
+                            ),
+                            const SizedBox(width: AppSpacing.space1),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'STUCK CAPTURES ALERT ($_stuckCount)',
+                                    style: AppTypography.xs.copyWith(
+                                      color: AppColors.verdictPending,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '$_stuckCount capture(s) exceeded 10 upload attempts. Tap to inspect & retry manually.',
+                                    style: AppTypography.xs.copyWith(color: AppColors.ink900),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.arrow_forward_ios, size: 12.0, color: AppColors.ink600),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.space2),
+                  ],
+
                   // Officer Identity & Status Card
                   Card(
                     margin: EdgeInsets.zero,
@@ -231,6 +372,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           label: 'Pending',
                           count: pendingCount,
                           color: AppColors.verdictPending,
+                          onTap: _openSyncQueue,
                         ),
                       ),
                       const SizedBox(width: AppSpacing.space1),
@@ -239,6 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           label: 'Failed',
                           count: failedCount,
                           color: AppColors.verdictFail,
+                          onTap: _openSyncQueue,
                         ),
                       ),
                     ],
@@ -341,31 +484,36 @@ class _MetricCard extends StatelessWidget {
   final String label;
   final int count;
   final Color color;
+  final VoidCallback? onTap;
 
   const _MetricCard({
     required this.label,
     required this.count,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.space1,
-        vertical: AppSpacing.space1,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.paper000,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        border: Border.all(
-          color: color.withValues(alpha: 0.4),
-          width: 1.0,
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.space1,
+          vertical: AppSpacing.space1,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+        decoration: BoxDecoration(
+          color: AppColors.paper000,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(
+            color: color.withValues(alpha: 0.4),
+            width: 1.0,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
           Text(
             label.toUpperCase(),
             style: AppTypography.xs.copyWith(
@@ -385,8 +533,9 @@ class _MetricCard extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 /// Capture Item Card with Flat Pill Sync Status Chip (§5.4)
