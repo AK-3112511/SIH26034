@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Section 2: Color System Tokens */
+  --ink-900: #12203B;
+  --ink-600: #3C4E70;
+  --paper-100: #F1F3F1;
+  --paper-000: #FFFFFF;
+  --brass-500: #A6742C;
+  --verdict-pass: #1E7A4D;
+  --verdict-fail: #B3261E;
+  --verdict-pending: #B5730B;
+  --verdict-neutral: #6B7280;
+
+  /* Section 3: Typography System */
+  --font-space-grotesk: 'Space Grotesk', system-ui, sans-serif;
+  --font-inter: 'Inter', system-ui, sans-serif;
+  --font-ibm-plex-mono: 'IBM Plex Mono', monospace;
+}
+
+body {
+  background-color: var(--paper-100);
+  color: var(--ink-900);
+  font-family: var(--font-inter);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Section 1 & 4: Signature Element - The Calibration Tick Rule Motif */
+.calibration-ruler {
+  height: 2px;
+  background-color: var(--brass-500);
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--ink-900),
+    var(--ink-900) 2px,
+    transparent 2px,
+    transparent 8px
+  );
+  margin: 1.5rem 0;
+}
+
+/* Section 1 & 5.1: Signature Element - The Seal Badge */
+.seal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  border: 1px solid var(--brass-500);
+  font-weight: 600;
+  font-size: 0.875rem;
+  font-family: var(--font-inter);
+  line-height: 1;
+}
+
+.seal-badge-pass {
+  background-color: rgba(30, 122, 77, 0.12);
+  color: var(--verdict-pass);
+  border-color: var(--brass-500);
+}
+
+.seal-badge-fail {
+  background-color: rgba(179, 38, 30, 0.12);
+  color: var(--verdict-fail);
+  border-color: var(--brass-500);
+}
+
+.seal-badge-pending {
+  background-color: rgba(181, 115, 11, 0.12);
+  color: var(--verdict-pending);
+  border-color: var(--brass-500);
+}
+
+.seal-badge-neutral {
+  background-color: rgba(107, 114, 128, 0.12);
+  color: var(--verdict-neutral);
+  border-color: var(--brass-500);
+}
+
+/* Section 5.3: Cards */
+.card-surface {
+  background-color: var(--paper-000);
+  border: 1px solid rgba(60, 78, 112, 0.08);
+  border-radius: 4px;
+  padding: 1rem;
+}
