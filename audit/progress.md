@@ -66,7 +66,7 @@ This document tracks all architecture setups, subsystem implementations, schema 
 
 ### 1. User & Audit Log Data Layer
 - **`users` Table:** [backend/app/models/user.py](file:///d:/SIH/metrologyAI/backend/app/models/user.py) — Stores `username` (unique), `email` (unique), `hashed_password` (bcrypt), `full_name`, `role` (`UserRole`: `field_lmo`, `senior_lmo`, `admin`), `district`, and `is_active`.
-- **`audit_logs` Table:** [backend/app/models/audit_log.py](file:///d:/SIH/metrologyAI/backend/app/models/audit_log.py) — Append-only audit table with `actor_id` (FK to `users.id`), `action`, `entity_type`, `entity_id`, `details` (JSONB with GIN index `idx_audit_logs_details`), `created_at`.
+- **`audit_log` Table:** [backend/app/models/audit_log.py](file:///d:/SIH/metrologyAI/backend/app/models/audit_log.py) — Append-only audit table with `actor_id` (FK to `users.id`), `action`, `target_type`, `target_id`, `timestamp`, `detail` (JSONB with GIN index `idx_audit_log_detail`).
 - **Alembic Migration:** Created [backend/alembic/versions/0002_add_users_and_audit_logs.py](file:///d:/SIH/metrologyAI/backend/alembic/versions/0002_add_users_and_audit_logs.py).
 
 ### 2. Token Claims & Security Architecture
@@ -75,7 +75,7 @@ This document tracks all architecture setups, subsystem implementations, schema 
 
 ### 3. Route Guards & Endpoints
 - **RBAC Guards:** [backend/app/core/deps.py](file:///d:/SIH/metrologyAI/backend/app/core/deps.py) provides `get_current_user`, `require_roles(...)`, `require_field_lmo`, `require_senior_lmo`, and `require_admin`.
-- **Login Endpoint:** `POST /api/v1/auth/login` in [backend/app/routers/auth.py](file:///d:/SIH/metrologyAI/backend/app/routers/auth.py) authenticates credentials via username or email, records `USER_LOGIN_SUCCESS` / `USER_LOGIN_FAILED` in `audit_logs`, and issues JWT.
+- **Login Endpoint:** `POST /api/v1/auth/login` in [backend/app/routers/auth.py](file:///d:/SIH/metrologyAI/backend/app/routers/auth.py) authenticates credentials via username or email, records `USER_LOGIN_SUCCESS` / `USER_LOGIN_FAILED` in `audit_log`, and issues JWT.
 - **Verification Endpoint:** `GET /api/v1/auth/me` protected test route returning verified identity and claims.
 
 ### 4. Verification Checkpoint
@@ -129,3 +129,42 @@ This document tracks all architecture setups, subsystem implementations, schema 
 - **Dedicated Unit Tests:** Created [backend/tests/test_audit.py](file:///d:/SIH/metrologyAI/backend/tests/test_audit.py) testing `log_audit`, `log_status_change`, and append-only sequencing.
 - **Full Test Suite:** Executed `pytest -v tests/` — **21/21 tests passed**.
 - **Alembic Migration:** Generated static SQL via `alembic upgrade head --sql` verifying DDL for `audit_log`.
+
+---
+
+## Log Entry #007 — Phase 1 Verification & Sign-Off (Backend Core: Data + Auth)
+**Date:** 2026-09-01
+**Author:** MetrologyAI Lead Architect & Security Reviewer
+**Status:** ✅ Phase 1 Formally Verified & Approved for Phase 2 Transition
+
+### 1. Verification of Required Core Capabilities
+- **1.1 Schema Verification (PASS):**
+  - All 4 core tables (`scans`, `extracted_fields`, `rule_results`, `challans`) plus `users` and `audit_log` registered and verified.
+  - Location trigger (`fn_derive_scan_location` + `trg_derive_scan_location`) verified in Alembic DDL.
+  - Spatial GIST index (`idx_scans_location`) verified on `scans.location`.
+  - JSONB GIN indexes verified on `extracted_fields.bbox`, `rule_results.evidence`, and `audit_log.detail`.
+  - Invariant ENUM/CHECK constraints verified for `scan_source_enum`, `scan_status_enum`, `rule_status_enum`, and `user_role_enum`.
+  - Invariant uniqueness constraint `uq_rule_results_scan_rule` on `(scan_id, rule_id)` in `rule_results` verified.
+- **1.2 Auth & RBAC Verification (PASS):**
+  - JWT tokens correctly issue `lmo_id`, `role`, `district`, `exp`, and `iat` claims.
+  - Route guards (`require_roles`, `require_field_lmo`, `require_senior_lmo`, `require_admin`) enforced and validated across all 3 roles.
+  - Both `USER_LOGIN_SUCCESS` and `USER_LOGIN_FAILED` audit records persist to `audit_log` with IP, user-agent, and actor/attempt details.
+- **1.3 Ingestion & Section 65B Cryptographic Vault (PASS):**
+  - `POST /api/v1/scans/ingest` stores original image, persists record with status `QUEUED`.
+  - `evidence_hash` strictly computed using §6.2 canonical binding: `sha256(image_bytes + "|" + lat + "|" + lng + "|" + captured_at_utc.isoformat() + "|" + device_id)`.
+  - Tamper detection unit tests confirm any change in coordinates, timestamp, device ID, or image bytes invalidates the hash.
+  - `GET /api/v1/scans/{scan_id}` reads back pristine scan record and status.
+- **1.4 Append-Only Audit Log (PASS):**
+  - Exact schema verified (`id`, `actor_id`, `action`, `target_type`, `target_id`, `timestamp`, `detail` JSONB with GIN index).
+  - Both login and scan ingestion events verified present in real end-to-end test runs.
+
+### 2. Comprehensive Test & Migration Suite Output
+- `alembic upgrade head --sql`: Successful static SQL generation confirming all DDL statements, triggers, enums, and indexes.
+- `pytest -v tests/`: **21 passed** (100% pass rate).
+
+### 3. Open Items & Blockers Flag for Later Phases
+> [!IMPORTANT]
+> **Pending Real Value Replacement for Phase 3.4:**
+> The Schedule II ruleset area/font bands in the backend are currently stubbed with placeholder values. These placeholder values are strictly temporary and **must be replaced with verified, authoritative figures from the active Legal Metrology (Packaged Commodities) Rules, 2011 Schedule II prior to completing Phase 3.4 (Rule Engine)**.
+
+---
