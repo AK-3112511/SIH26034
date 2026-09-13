@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional, Any, TYPE_CHECKING
-from sqlalchemy import Text, ForeignKey, UniqueConstraint, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ENUM
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -31,8 +32,8 @@ class RuleResult(Base):
         ENUM(RuleStatus, name="rule_status_enum", create_type=False),
         nullable=False
     )
-    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    evidence: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
     scan: Mapped[Scan] = relationship("Scan", back_populates="rule_results")

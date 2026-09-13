@@ -22,3 +22,18 @@ dependencies = [
     "python-multipart>=0.0.9"
 ]
 requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+extend-select = ["I"]
+ignore = [
+    "B008",   # Do not perform function call `Depends`/`File`/`Form` in argument defaults (FastAPI standard)
+    "BLE001", # Do not catch blind exception: `Exception` (needed for resilient optional plugin loading)
+    "RUF022", # __all__ sorting (we prefer logical grouped organization)
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends", "fastapi.File", "fastapi.Form", "fastapi.Security"]

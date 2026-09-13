@@ -1,15 +1,15 @@
 import uuid
-from typing import List, Callable
+from collections.abc import Callable
+
 import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
 from app.core.security import decode_access_token
-from app.models.user import User
+from app.db.session import get_db
 from app.models.enums import UserRole
-from app.schemas.auth import TokenPayload
+from app.models.user import User
 
 security = HTTPBearer(auto_error=True)
 

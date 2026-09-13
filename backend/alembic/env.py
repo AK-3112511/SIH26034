@@ -2,8 +2,7 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
@@ -31,9 +30,7 @@ target_metadata = Base.metadata
 
 def include_object(object, name, type_, reflected, compare_to):
     # Ignore internal PostGIS tables from migration operations
-    if type_ == "table" and name in ["spatial_ref_sys", "geometry_columns", "geography_columns"]:
-        return False
-    return True
+    return not (type_ == "table" and name in {"spatial_ref_sys", "geometry_columns", "geography_columns"})
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.

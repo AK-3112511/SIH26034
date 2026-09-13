@@ -10,3 +10,5 @@ shapely>=2.0.3
 pyjwt>=2.8.0
 bcrypt>=4.0.0
 python-multipart>=0.0.9
+opencv-python-headless>=4.8.0
+numpy>=1.24.0

@@ -1,15 +1,18 @@
 import uuid
-from typing import Optional, Dict, Any
+from typing import Any
+
 from sqlalchemy.orm import Session
+
 from app.models.audit_log import AuditLog
+
 
 def log_audit(
     db: Session,
     action: str,
     target_type: str,
-    target_id: Optional[str] = None,
-    actor_id: Optional[uuid.UUID] = None,
-    detail: Optional[Dict[str, Any]] = None
+    target_id: str | None = None,
+    actor_id: uuid.UUID | None = None,
+    detail: dict[str, Any] | None = None
 ) -> AuditLog:
     """Record an immutable, append-only entry in the audit_log table.
 
@@ -36,10 +39,10 @@ def log_status_change(
     target_type: str,
     target_id: str,
     new_status: str,
-    old_status: Optional[str] = None,
-    actor_id: Optional[uuid.UUID] = None,
-    action: Optional[str] = None,
-    detail: Optional[Dict[str, Any]] = None
+    old_status: str | None = None,
+    actor_id: uuid.UUID | None = None,
+    action: str | None = None,
+    detail: dict[str, Any] | None = None
 ) -> AuditLog:
     """Automated helper to record status transitions on managed entities (e.g. Scans, Challans)."""
     payload = {
@@ -65,9 +68,9 @@ def log_audit_event(
     db: Session,
     action: str,
     entity_type: str,
-    actor_id: Optional[uuid.UUID] = None,
-    entity_id: Optional[str] = None,
-    details: Optional[Dict[str, Any]] = None
+    actor_id: uuid.UUID | None = None,
+    entity_id: str | None = None,
+    details: dict[str, Any] | None = None
 ) -> AuditLog:
     """Compatibility alias mapping old signature to log_audit."""
     return log_audit(
