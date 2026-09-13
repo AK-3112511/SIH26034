@@ -62,7 +62,7 @@ class SyncWorker extends ChangeNotifier {
         constraints: Constraints(
           networkType: NetworkType.connected,
         ),
-        existingWorkPolicy: ExistingWorkPolicy.replace,
+        existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
       );
       debugPrint('[SyncWorker] WorkManager periodic sync task registered (15 min interval).');
     } catch (e) {
