@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Any, Dict
+from typing import Any
+
 import bcrypt
 import jwt
+
 from app.core.config import settings
+
 
 def get_password_hash(password: str) -> str:
     """Hash a plain-text password using bcrypt."""
@@ -22,9 +25,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_access_token(
     lmo_id: str,
     role: str,
-    district: Optional[str] = None,
-    expires_delta: Optional[timedelta] = None,
-    extra_claims: Optional[Dict[str, Any]] = None
+    district: str | None = None,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict[str, Any] | None = None
 ) -> str:
     """Create a signed JWT access token containing lmo_id, role, and district."""
     now = datetime.now(timezone.utc)
@@ -33,7 +36,7 @@ def create_access_token(
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "sub": str(lmo_id),
         "lmo_id": str(lmo_id),
         "role": str(role),
@@ -52,7 +55,7 @@ def create_access_token(
     )
     return encoded_jwt
 
-def decode_access_token(token: str) -> Dict[str, Any]:
+def decode_access_token(token: str) -> dict[str, Any]:
     """Decode and validate a JWT access token."""
     return jwt.decode(
         token,

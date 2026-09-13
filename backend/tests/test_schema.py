@@ -4,20 +4,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import inspect, Index, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, ENUM, JSONB
 from geoalchemy2 import Geometry
+from sqlalchemy import UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-from app.models import (
-    Base,
-    Scan,
-    ExtractedField,
-    RuleResult,
-    Challan,
-    ScanSource,
-    ScanStatus,
-    RuleStatus
-)
+from app.models import Base, Scan
+
 
 def test_tables_registered():
     table_names = set(Base.metadata.tables.keys())
@@ -72,7 +64,7 @@ def test_extracted_fields_table_structure():
     assert isinstance(table.columns["bbox"].type, JSONB)
 
     # FK check
-    fk = list(table.foreign_keys)[0]
+    fk = next(iter(table.foreign_keys))
     assert fk.column.table.name == "scans"
     assert fk.column.name == "scan_id"
 
@@ -97,7 +89,7 @@ def test_challans_table_structure():
     assert expected_cols == col_names
     
     # FK check
-    fk = list(table.foreign_keys)[0]
+    fk = next(iter(table.foreign_keys))
     assert fk.column.table.name == "scans"
     assert fk.column.name == "scan_id"
 

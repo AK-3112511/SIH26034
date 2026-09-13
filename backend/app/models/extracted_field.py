@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional, Any, TYPE_CHECKING
-from sqlalchemy import Float, Text, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import Float, ForeignKey, Index, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -26,11 +27,11 @@ class ExtractedField(Base):
         index=True
     )
     field_name: Mapped[str] = mapped_column(Text, nullable=False)
-    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    bbox: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
-    ocr_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    semantic_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    font_height_mm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bbox: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    semantic_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    font_height_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Relationships
     scan: Mapped[Scan] = relationship("Scan", back_populates="extracted_fields")

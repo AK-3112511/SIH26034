@@ -1,5 +1,6 @@
 import enum
 
+
 class ScanSource(str, enum.Enum):
     MOBILE = "mobile"
     ECOMMERCE = "ecommerce"
@@ -10,6 +11,7 @@ class ScanStatus(str, enum.Enum):
     FAILED = "FAILED"
     PENDING_REVIEW = "PENDING_REVIEW"
     CALIBRATION_FAILED = "CALIBRATION_FAILED"
+    LOW_CONFIDENCE_CALIBRATION = "LOW_CONFIDENCE_CALIBRATION"
 
 class RuleStatus(str, enum.Enum):
     PASS = "PASS"
