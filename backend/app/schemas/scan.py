@@ -1,16 +1,17 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List, Any, Dict
-from pydantic import BaseModel, ConfigDict, field_validator
-from app.models.enums import ScanSource, ScanStatus, RuleStatus
 
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.models.enums import RuleStatus, ScanSource, ScanStatus
 
 class ScanIngestResponse(BaseModel):
     scan_id: uuid.UUID
     status: ScanStatus
     image_url: str
     evidence_hash: str
-    captured_at_utc: Optional[datetime] = None
+    captured_at_utc: datetime | None = None
     created_at: datetime
     message: str = "Scan received and queued for processing"
 
@@ -20,11 +21,11 @@ class ScanIngestResponse(BaseModel):
 class ExtractedFieldResponse(BaseModel):
     id: uuid.UUID
     field_name: str
-    raw_text: Optional[str] = None
-    bbox: Optional[Any] = None
-    ocr_confidence: Optional[float] = None
-    semantic_confidence: Optional[float] = None
-    font_height_mm: Optional[float] = None
+    raw_text: str | None = None
+    bbox: Any | None = None
+    ocr_confidence: float | None = None
+    semantic_confidence: float | None = None
+    font_height_mm: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -33,8 +34,8 @@ class RuleResultResponse(BaseModel):
     id: uuid.UUID
     rule_id: str
     status: RuleStatus
-    reason: Optional[str] = None
-    evidence: Optional[Any] = None
+    reason: str | None = None
+    evidence: Any | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,13 +46,14 @@ class ScanDetailResponse(BaseModel):
     status: ScanStatus
     image_url: str
     evidence_hash: str
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    captured_at_utc: Optional[datetime] = None
-    mm_per_px: Optional[float] = None
-    pdp_area_cm2: Optional[float] = None
-    ruleset_version: Optional[str] = None
+    lat: float | None = None
+    lng: float | None = None
+    captured_at_utc: datetime | None = None
+    mm_per_px: float | None = None
+    pdp_area_cm2: float | None = None
+    ruleset_version: str | None = None
     created_at: datetime
+
     extracted_fields: List[ExtractedFieldResponse] = []
     rule_results: List[RuleResultResponse] = []
     # Phase 4: reviewer assignment fields
@@ -77,6 +79,8 @@ class ScanListItem(BaseModel):
     # Confidence gap: max(ocr_confidence) - min(ocr_confidence) across extracted fields
     confidence_gap: Optional[float] = None
     age_hours: Optional[float] = None    # hours since created_at
+
+    
 
     model_config = ConfigDict(from_attributes=True)
 

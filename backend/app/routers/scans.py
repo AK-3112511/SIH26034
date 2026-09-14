@@ -1,8 +1,20 @@
 """Phase 4: full scan router — ingest, list (queue), detail, review, ingest-derived."""
 import uuid
-from datetime import datetime, timezone, date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, Query
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, case, and_, or_, Text
 
@@ -24,8 +36,8 @@ from app.schemas.scan import (
 from app.services.storage import get_storage_provider
 from app.services.hash_vault import compute_section_65b_hash
 from app.services.audit import log_audit, log_status_change
+from app.services.pipeline_orchestrator import process_queued_scans, process_scan
 from app.core.deps import get_current_user, require_senior_lmo
-
 router = APIRouter(prefix="/scans", tags=["scans"])
 
 
@@ -238,6 +250,7 @@ def list_scans(
 @router.post("/ingest", response_model=ScanIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_scan(
     request: Request,
+    background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
     lat: Optional[float] = Form(None),
     lng: Optional[float] = Form(None),
@@ -245,6 +258,7 @@ async def ingest_scan(
     device_id: Optional[str] = Form(None),
     reference_object_type: Optional[str] = Form(None),
     source: Optional[ScanSource] = Form(ScanSource.MOBILE),
+    auto_process: bool = Form(True),
     db: Session = Depends(get_db),
 ):
     """Ingest a field mobile scan.
@@ -306,8 +320,16 @@ async def ingest_scan(
             "evidence_hash": evidence_hash,
             "image_url": image_url,
             "ip_address": client_ip,
-        }
+
+        
+
+        },
+
     )
+
+    # Dispatch full processing pipeline asynchronously if auto_process is enabled
+    if auto_process:
+        background_tasks.add_task(process_scan, scan.scan_id)
 
     return ScanIngestResponse(
         scan_id=scan.scan_id,
@@ -316,8 +338,9 @@ async def ingest_scan(
         evidence_hash=scan.evidence_hash,
         captured_at_utc=scan.captured_at_utc,
         created_at=scan.created_at,
-        message="Scan received and queued for processing"
+        message="Scan received and queued for processing",
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +485,61 @@ async def ingest_derived_scan(
 # GET /scans/{scan_id}  — full detail
 # ---------------------------------------------------------------------------
 
+@router.post("/{scan_id}/process", response_model=ScanDetailResponse)
+def trigger_scan_process(
+    scan_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Synchronously triggers or re-runs the full MetrologyAI pipeline (Phases 3.1 -> 3.5)
+    on a scan, returning real extracted fields, spatial measurements, and rule results.
+    """
+    processed_scan = process_scan(scan_id=scan_id, db=db)
+    if not processed_scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scan with ID '{scan_id}' not found",
+        )
+
+    # Re-fetch with relationships loaded
+    scan = (
+        db.query(Scan)
+        .options(
+            joinedload(Scan.extracted_fields),
+            joinedload(Scan.rule_results),
+        )
+        .filter(Scan.scan_id == scan_id)
+        .first()
+    )
+    return ScanDetailResponse.model_validate(scan)
+
+
+@router.post("/process-queued", response_model=list[ScanDetailResponse])
+def trigger_batch_process_queued(
+    limit: int = Query(10, ge=1, le=100, description="Max queued scans to process"),
+    db: Session = Depends(get_db),
+):
+    """
+    Batch processes pending QUEUED scans up to limit and returns updated records.
+    """
+    processed_scans = process_queued_scans(limit=limit, db=db)
+    results: list[ScanDetailResponse] = []
+    for s in processed_scans:
+        full_scan = (
+            db.query(Scan)
+            .options(
+                joinedload(Scan.extracted_fields),
+                joinedload(Scan.rule_results),
+            )
+            .filter(Scan.scan_id == s.scan_id)
+            .first()
+        )
+        if full_scan:
+            results.append(ScanDetailResponse.model_validate(full_scan))
+    return results
+
+
+
 @router.get("/{scan_id}", response_model=ScanDetailResponse)
 def get_scan(
     scan_id: uuid.UUID,
@@ -469,18 +547,24 @@ def get_scan(
     current_user: User = Depends(get_current_user),
 ):
     """Retrieve scan status, evidence details, extracted fields, and rule results."""
-    scan = db.query(Scan).options(
-        joinedload(Scan.extracted_fields),
-        joinedload(Scan.rule_results)
-    ).filter(Scan.scan_id == scan_id).first()
+    scan = (
+        db.query(Scan)
+        .options(
+            joinedload(Scan.extracted_fields),
+            joinedload(Scan.rule_results),
+        )
+        .filter(Scan.scan_id == scan_id)
+        .first()
+    )
 
     if not scan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Scan with ID '{scan_id}' not found"
+            detail=f"Scan with ID '{scan_id}' not found",
         )
 
     return ScanDetailResponse.model_validate(scan)
+
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +635,4 @@ def review_scan(
         reviewer_note=scan.reviewer_note,
         message="Review submitted successfully"
     )
+

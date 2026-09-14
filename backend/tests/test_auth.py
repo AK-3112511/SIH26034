@@ -1,18 +1,19 @@
 import os
 import sys
 import uuid
+
 import pytest
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from fastapi import FastAPI, Depends
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.dialects.postgresql import JSONB, UUID, ENUM
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
 
 @compiles(JSONB, "sqlite")
 def compile_jsonb_sqlite(type_, compiler, **kw):
@@ -26,13 +27,17 @@ def compile_uuid_sqlite(type_, compiler, **kw):
 def compile_enum_sqlite(type_, compiler, **kw):
     return "TEXT"
 
-from app.db.base import Base
+from app.core.deps import require_admin, require_field_lmo, require_senior_lmo
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    get_password_hash,
+    verify_password,
+)
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.enums import UserRole
 from app.models.user import User
-from app.models.audit_log import AuditLog
-from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
-from app.core.deps import get_current_user, require_roles, require_field_lmo, require_senior_lmo, require_admin
 from app.routers import auth
 
 # In-memory SQLite database for testing auth services

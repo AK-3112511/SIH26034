@@ -1,6 +1,7 @@
-from typing import Optional
+
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MetrologyAI API Service"
@@ -15,11 +16,11 @@ class Settings(BaseSettings):
     # Object Storage Configuration (local | s3)
     STORAGE_BACKEND: str = "local"
     STORAGE_LOCAL_DIR: str = "uploads"
-    S3_BUCKET_NAME: Optional[str] = None
-    S3_REGION: Optional[str] = "ap-south-1"
-    S3_ENDPOINT_URL: Optional[str] = None
-    S3_ACCESS_KEY: Optional[str] = None
-    S3_SECRET_KEY: Optional[str] = None
+    S3_BUCKET_NAME: str | None = None
+    S3_REGION: str | None = "ap-south-1"
+    S3_ENDPOINT_URL: str | None = None
+    S3_ACCESS_KEY: str | None = None
+    S3_SECRET_KEY: str | None = None
     
     # PostgreSQL Configuration
     POSTGRES_SERVER: str = "localhost"
@@ -29,7 +30,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "metrologyai"
     
     # Explicit DATABASE_URL override if provided
-    SQLALCHEMY_DATABASE_URI: Optional[str] = None
+    SQLALCHEMY_DATABASE_URI: str | None = None
 
     @computed_field
     @property

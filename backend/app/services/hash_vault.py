@@ -1,13 +1,13 @@
 import hashlib
 from datetime import datetime
-from typing import Optional
+
 
 def compute_section_65b_hash(
     image_bytes: bytes,
-    lat: Optional[float] = None,
-    lng: Optional[float] = None,
-    captured_at_utc: Optional[datetime] = None,
-    device_id: Optional[str] = None
+    lat: float | None = None,
+    lng: float | None = None,
+    captured_at_utc: datetime | None = None,
+    device_id: str | None = None
 ) -> str:
     """Compute legal Section 65B SHA-256 cryptographic binding over evidentiary capture.
 
@@ -32,10 +32,10 @@ def compute_section_65b_hash(
 def verify_section_65b_hash(
     expected_hash: str,
     image_bytes: bytes,
-    lat: Optional[float] = None,
-    lng: Optional[float] = None,
-    captured_at_utc: Optional[datetime] = None,
-    device_id: Optional[str] = None
+    lat: float | None = None,
+    lng: float | None = None,
+    captured_at_utc: datetime | None = None,
+    device_id: str | None = None
 ) -> bool:
     """Verify digital evidence integrity under Section 65B."""
     computed = compute_section_65b_hash(

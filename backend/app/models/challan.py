@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
-from sqlalchemy import Text, ForeignKey, DateTime, func
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,12 +27,12 @@ class Challan(Base):
         nullable=False,
         index=True
     )
-    lmo_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    lmo_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         nullable=True
     )
-    pdf_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    pdf_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pdf_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pdf_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

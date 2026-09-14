@@ -1,12 +1,13 @@
 import uuid
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import String, Text, Boolean, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+
+from sqlalchemy import Boolean, DateTime, String, Text, func
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import UserRole
+
 
 class User(Base):
     __tablename__ = "users"
@@ -39,7 +40,7 @@ class User(Base):
         ),
         nullable=False
     )
-    district: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    district: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

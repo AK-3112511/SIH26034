@@ -1,8 +1,9 @@
 import os
 import uuid
 from abc import ABC, abstractmethod
-from typing import Optional
+
 from app.core.config import settings
+
 
 class StorageProvider(ABC):
     """Abstract interface for immutable evidentiary object storage."""
@@ -10,18 +11,16 @@ class StorageProvider(ABC):
     @abstractmethod
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str:
         """Store file bytes and return access URL/URI."""
-        pass
 
     @abstractmethod
     def get_file(self, file_path_or_key: str) -> bytes:
         """Retrieve stored file bytes by key/path."""
-        pass
 
 
 class LocalStorageProvider(StorageProvider):
     """Local filesystem storage provider for development and standalone edge deployment."""
 
-    def __init__(self, base_dir: Optional[str] = None):
+    def __init__(self, base_dir: str | None = None):
         self.base_dir = os.path.abspath(base_dir or settings.STORAGE_LOCAL_DIR)
         os.makedirs(self.base_dir, exist_ok=True)
 
