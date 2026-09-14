@@ -39,7 +39,8 @@ def test_scans_table_structure():
     expected_cols = {
         "scan_id", "source", "image_url", "evidence_hash",
         "lat", "lng", "location", "captured_at_utc",
-        "mm_per_px", "pdp_area_cm2", "status", "ruleset_version", "created_at"
+        "mm_per_px", "pdp_area_cm2", "status", "ruleset_version", "created_at",
+        "assigned_lmo_id", "reviewer_note"
     }
     assert expected_cols == col_names
 

@@ -24,6 +24,7 @@ from app.models.extracted_field import ExtractedField
 from app.models.rule_result import RuleResult
 from app.models.scan import Scan
 from app.routers import scans
+from app.core.deps import get_current_user
 from app.services.pipeline_orchestrator import (
     MasterPipeline,
     PipelineExecutionResult,
@@ -97,7 +98,11 @@ def override_get_db():
     finally:
         db.close()
 
+def override_get_current_user():
+    return {"id": "test-user-id", "role": "senior_lmo"}
+
 app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_current_user] = override_get_current_user
 client = TestClient(app)
 
 

@@ -34,7 +34,7 @@ import {
 import { AppShell } from "@/app/components/AppShell";
 import { SealBadge, VerdictChip, type VerdictStatus } from "@/app/components/SealBadge";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
-import { scansApi, type ScanDetail, type ExtractedField, type RuleResult } from "@/lib/api";
+import { scansApi, challansApi, type ScanDetail, type ExtractedField, type RuleResult } from "@/lib/api";
 
 // Friendly metadata for statutory rules
 const RULE_METADATA: Record<
@@ -87,6 +87,9 @@ export default function ScanDetailPage() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  
+  const [generatingChallan, setGeneratingChallan] = useState(false);
+  const [challanUrl, setChallanUrl] = useState<string | null>(null);
 
   const fetchScan = useCallback(async () => {
     if (!scanId) return;
@@ -157,6 +160,21 @@ export default function ScanDetailPage() {
       setSubmitError(msg || "Failed to submit review decision");
     } finally {
       setSubmittingReview(false);
+    }
+  };
+
+  const handleGenerateChallan = async () => {
+    setGeneratingChallan(true);
+    setSubmitError(null);
+    try {
+      const res = await challansApi.generate(scanId);
+      setSubmitSuccess(`Challan generated successfully. PDF Hash: ${res.data.pdf_hash}`);
+      setChallanUrl(res.data.pdf_url);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setSubmitError(msg || "Failed to generate challan.");
+    } finally {
+      setGeneratingChallan(false);
     }
   };
 
@@ -627,24 +645,31 @@ export default function ScanDetailPage() {
                   {submittingReview ? "Submitting Decision..." : "Submit Review & Confirm Verdict"}
                 </button>
 
-                {/* Section 39 Challan button: disabled per spec until Phase 5 */}
+                {/* Section 39 Challan button */}
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    disabled={true}
-                    className="
-                      btn-accent opacity-50 cursor-not-allowed
-                      w-full sm:w-auto
-                    "
-                    title="Section 39 Challan generation enabled in Phase 5"
-                    aria-disabled="true"
+                    onClick={handleGenerateChallan}
+                    disabled={generatingChallan || scan?.status !== "FAILED"}
+                    className={`
+                      btn-accent w-full sm:w-auto
+                      ${scan?.status !== "FAILED" ? "opacity-50 cursor-not-allowed" : ""}
+                    `}
+                    title={scan?.status !== "FAILED" ? "Only failed scans can generate challans" : "Generate Section 39 Challan"}
                   >
                     <FileText size={16} />
-                    <span>Generate Section 39 Challan</span>
+                    <span>{generatingChallan ? "Generating..." : "Generate Section 39 Challan"}</span>
                   </button>
-                  <span className="font-mono text-[11px] text-ink-600 block sm:inline">
-                    (Enabled in Phase 5)
-                  </span>
+                  {challanUrl && (
+                    <a
+                      href={challanUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-[11px] text-brass-500 hover:underline block sm:inline"
+                    >
+                      View PDF
+                    </a>
+                  )}
                 </div>
               </div>
             </div>

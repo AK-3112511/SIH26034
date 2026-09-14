@@ -163,3 +163,28 @@ export const scansApi = {
       { headers: { "Content-Type": "multipart/form-data" } }
     ),
 };
+
+// ─── Challans ─────────────────────────────────────────────────────────────────
+
+export interface ChallanResponse {
+  challan_id: string;
+  scan_id: string;
+  lmo_id: string | null;
+  pdf_url: string | null;
+  pdf_hash: string | null;
+  generated_at: string;
+}
+
+export interface ChallanListResponse {
+  items: ChallanResponse[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const challansApi = {
+  list: (params: { page?: number; page_size?: number }) =>
+    api.get<ChallanListResponse>("/challans/", { params }),
+  generate: (scan_id: string) =>
+    api.post<ChallanResponse>("/challans/generate", { scan_id }),
+};

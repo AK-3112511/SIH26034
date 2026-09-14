@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from geoalchemy2 import Geometry
 from sqlalchemy import DateTime, Float, Text, func

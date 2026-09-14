@@ -32,9 +32,11 @@ from app.schemas.scan import (
     ReviewSubmitResponse,
     DashboardStatsResponse,
     IngestDerivedRequest,
+    HashVerificationResponse,
 )
 from app.services.storage import get_storage_provider
 from app.services.hash_vault import compute_section_65b_hash
+from app.models.audit_log import AuditLog
 from app.services.audit import log_audit, log_status_change
 from app.services.pipeline_orchestrator import process_queued_scans, process_scan
 from app.core.deps import get_current_user, require_senior_lmo
@@ -634,5 +636,68 @@ def review_scan(
         new_status=scan.status,
         reviewer_note=scan.reviewer_note,
         message="Review submitted successfully"
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /scans/{scan_id}/verify-hash  — Section 65B hash verification
+# ---------------------------------------------------------------------------
+
+@router.get("/{scan_id}/verify-hash", response_model=HashVerificationResponse)
+def verify_scan_hash(
+    scan_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Verify Section 65B digital evidence integrity.
+    
+    Recomputes the cryptographic hash from the original image bytes in storage
+    and the canonical payload components (GPS, timestamp, device_id).
+    """
+    scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+
+    # Fetch ingest audit log to retrieve the original device_id used during hashing
+    audit = db.query(AuditLog).filter(
+        AuditLog.target_id == str(scan_id),
+        AuditLog.action.in_(["SCAN_INGESTED", "SCAN_INGESTED_DERIVED"])
+    ).first()
+    
+    device_id = None
+    if audit and audit.detail:
+        if audit.action == "SCAN_INGESTED":
+            device_id = audit.detail.get("device_id")
+        elif audit.action == "SCAN_INGESTED_DERIVED":
+            device_id = f"web:{audit.actor_id}"
+
+    storage = get_storage_provider()
+    try:
+        image_bytes = storage.get_file(scan.image_url)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Original image file not found in storage"
+        )
+        
+    # Recompute the hash
+    # SQLite might return a naive datetime; ensure it's UTC before hashing.
+    dt = scan.captured_at_utc
+    if dt and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    computed = compute_section_65b_hash(
+        image_bytes=image_bytes,
+        lat=scan.lat,
+        lng=scan.lng,
+        captured_at_utc=dt,
+        device_id=device_id
+    )
+    
+    return HashVerificationResponse(
+        scan_id=scan.scan_id,
+        is_valid=(computed == scan.evidence_hash),
+        expected_hash=scan.evidence_hash,
+        computed_hash=computed
     )
 

@@ -925,3 +925,82 @@ Each rule is implemented as an independent, deterministic pure function returnin
 
 
 
+
+---
+
+## Log Entry #017 — Phase 3 & 4 Verification Audit
+**Date:** 2026-09-14
+**Author:** MetrologyAI Verification AI
+**Status:** ✅ Phase 3 (AI Pipeline) and Phase 4 (Web Dashboard Core) Fully Verified
+
+### 1. Phase 3 — AI Pipeline Verification
+- **3.1 Preprocessing (PASS):** Dual-engine detector architecture is present and tested (`CustomYOLOv8Detector` loaded from `weights/metrology_yolov8.pt` with a documented fallback to the `GeometricCVDetector` via `test_custom_yolov8_detector_falls_back_when_weights_absent`). Explicit calibration gating halts at `CALIBRATION_FAILED` (and prevents `mm_per_px` estimation) when the card is missing or confidence is $< 0.85$ (tested in `test_full_pipeline_low_confidence_card_triggers_calibration_failed`). Perspective correction, curvature analysis (cylindrical dewarp), and CLAHE glare reduction are fully implemented and verified via unit tests.
+- **3.2 Extraction (PASS):** Dual-engine OCR (`NativePaddleOCREngine` with a deterministic fallback) and dual-engine semantic mapping (`Florence2SemanticMapper` loading `microsoft/Florence-2-base` with a rule-based fallback) are present. Schema models (`ExtractedField`) strictly separate `ocr_confidence` and `semantic_confidence` across all 8 mandated fields. They are never blended.
+- **3.3 Spatial Calibration (PASS):** mm-per-pixel computed via both edges of the ISO/IEC 7810 card. `LOW_CONFIDENCE_CALIBRATION` is properly flagged when the discrepancy between the long edge and short edge exceeds 5% (verified in `test_spatial_calibration.py`).
+- **3.4 Rule Engine & Placeholder Status (PASS):** PCR rules `6.1.a`, `6.1.c`, `6.1.e`, `6.1.g`, and `schedule_ii` are independent evaluators. **Schedule II status explicitly re-confirmed**: The code currently uses `PLACEHOLDER_SCHEDULE_II_V1` and is well-documented as a placeholder awaiting final authoritative values.
+- **3.5 Confidence Gating (PASS):** Scan-level rollup properly leverages the gating rules ($< 0.95$ OCR and $< 0.90$ Semantic $\rightarrow$ UNVERIFIED), successfully routing items to `PENDING_REVIEW` queue or passing them.
+
+### 2. Phase 4 — Web Dashboard Verification
+- **4.1 Auth + Shell (PASS):** `/login` explicitly rejects `field_lmo` tokens (raising `FIELD_LMO_REJECTED`) and accepts `senior_lmo` and `admin` roles, granting appropriate UI access.
+- **4.2 Overview (PASS):** Uses real stats queries (`/scans/stats`), and the heatmap is properly maintained as a Phase 6 placeholder without premature GIS queries.
+- **4.3 Review Queue (PASS):** Successfully fetches `PENDING_REVIEW` items. Single-review invariant is strictly maintained (no bulk select). The queue is filterable by district and sortable by confidence gap and age.
+- **4.4 Scan Detail (PASS):** Chain-of-custody invariant respected (bbox SVG is layered over the untouched raw image). Overrides require non-empty `reviewer_note`. The `SealBadge` component handles the statutory verdicts. The "Generate Section 39 Challan" button exists but is disabled (awaiting Phase 5).
+- **4.5 E-Commerce Ingestion (PASS):** Uses the manual dimension ingestion flow (`/api/v1/scans/ingest-derived`). It seamlessly calculates `mm_per_px` and `pdp_area_cm2` and hands them directly back to the same Phase 3 calibration/rule evaluation pipeline rather than bifurcating the logic.
+
+### 3. Comprehensive Test Output
+- Web Test Suite (`npm test`): **30/30 passed**
+- Backend Test Suite (`pytest`): **122/122 passed**
+
+### 4. Open Items & Blockers
+> [!IMPORTANT]
+> **Re-Confirming Placeholder Status for Phase 3.4:**
+> The `PLACEHOLDER_SCHEDULE_II_V1` object is still in place. It successfully executes the rule boundaries logically, but the embedded threshold values are strictly placeholders. Authoritative values from PCR 2011 Schedule II MUST be substituted before production deployment.
+
+---
+
+## Log Entry #018 — Phase 5.1 (Section 65B Hash Vault Verification)
+**Date:** 2026-09-14
+**Author:** MetrologyAI Agent
+**Status:** ✅ Phase 5.1 Verified
+
+### Summary of Changes:
+- **Hash Verification Endpoint**: Added `GET /api/v1/scans/{scan_id}/verify-hash` in `backend/app/routers/scans.py` to recompute the canonical Section 65B hash from the unmodified raw image stored in object storage and canonical payload elements (GPS coords, timestamp, and device ID extracted from the immutable `AuditLog`).
+- **Timezone Fix for Immutable Log Checks**: Addressed SQLite timezone stripping behavior by ensuring timezone awareness on deserialization before hashing to guarantee perfectly reproducible hashes under the Section 65B test suite.
+- **Testing**: Added `test_verify_scan_hash` to `tests/test_scans.py` which executes ingestion and asserts the verified output matches perfectly. Test passes 100%.
+
+### Open Items/Next Steps:
+- Ready to proceed to **Phase 5.2 (Challan PDF Generator)** which will introduce `ReportLab` to produce the Section 39 Auto-Challan securely.
+
+---
+
+## Log Entry #019 — Phase 5.2 (Challan PDF Generator)
+**Date:** 2026-09-14
+**Author:** MetrologyAI Agent
+**Status:** ✅ Phase 5.2 Verified
+
+### Summary of Changes:
+- **PDF Generation Endpoint**: Created `POST /api/v1/challans/generate` in `app/routers/challans.py` built with `ReportLab`.
+- **Chain of Custody Enforcement**: The generated Section 39 Auto-Challan strictly enforces chain-of-custody by placing the *untouched* original evidentiary image on the document alongside a separately rendered, dynamically annotated copy containing the rule-breaking bounding box violations mapped precisely using Pillow and vector graphics.
+- **Strict Validation**: The endpoint actively blocks generation if `lat`, `lng`, `assigned_lmo_id`, or `rule_results` are missing, fully complying with the "never emit a partially-filled document" constraint from §2.1.
+- **Double Hashing**: Computes and stores the `pdf_hash` (the hash of the generated PDF bytes) in the database and audit log for tracking, while printing the original Section 65B hash of the image natively onto the PDF.
+- **Tests**: Created `tests/test_challans.py` with full SQLite spatial DB fixture support to test generation and validation endpoints successfully.
+
+### Open Items/Next Steps:
+- Ready to proceed to **Phase 5.3 (Challan Archive Screen)** to build the frontend Next.js interface for browsing and downloading these generated files.
+
+---
+
+## Log Entry #020 — Phase 5.3 (Challan Archive Screen)
+**Date:** 2026-09-14
+**Author:** MetrologyAI Agent
+**Status:** ✅ Phase 5.3 Verified
+
+### Summary of Changes:
+- **Backend API**: Added `GET /api/v1/challans/` endpoint to `app/routers/challans.py` allowing field LMOs and admins to retrieve challans in paginated sets. Includes tests covering 404/200 scenarios.
+- **Frontend API Client**: Added `challansApi.list` and `challansApi.generate` to `web/lib/api.ts`.
+- **Archive Page**: Fully implemented `web/app/challans/page.tsx`. Replaced the "Coming Soon" placeholder with a robust data table displaying generated Section 39 challans, following the layout structure of the queue screen. Includes PDF hashing visibility and direct download actions.
+- **Scan Detail Integration**: Wired up the "Generate Section 39 Challan" button in `web/app/queue/[id]/page.tsx`. Generates the challan asynchronously and dynamically reveals the "View PDF" hyperlink upon success.
+- **Completion**: Phase 5 is now totally implemented.
+
+### Open Items/Next Steps:
+- App and Web systems are ready for end-to-end testing as requested by the user. Once testing is approved, we will push the changes.

@@ -137,3 +137,10 @@ class IngestDerivedRequest(BaseModel):
     package_depth_mm: Optional[float] = None
     platform: str          # 'blinkit' | 'amazon' | 'flipkart' | 'other'
     platform_url: Optional[str] = None
+
+
+class HashVerificationResponse(BaseModel):
+    scan_id: uuid.UUID
+    is_valid: bool
+    expected_hash: str
+    computed_hash: str

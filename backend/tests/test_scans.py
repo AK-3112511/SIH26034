@@ -48,6 +48,7 @@ from app.models.extracted_field import ExtractedField
 from app.models.rule_result import RuleResult
 from app.models.scan import Scan
 from app.routers import scans
+from app.core.deps import get_current_user
 from app.services.hash_vault import compute_section_65b_hash, verify_section_65b_hash
 
 # In-memory SQLite database for testing scan ingestion
@@ -85,7 +86,11 @@ def override_get_db():
     finally:
         db.close()
 
+def override_get_current_user():
+    return {"id": "test-user-id", "role": "senior_lmo"}
+
 app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_current_user] = override_get_current_user
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
@@ -225,3 +230,37 @@ def test_get_scan_not_found():
     response = client.get(f"/api/v1/scans/{random_id}")
     assert response.status_code == 404
     assert f"Scan with ID '{random_id}' not found" in response.json()["detail"]
+
+
+def test_verify_scan_hash():
+    dummy_img = b"test_image_bytes"
+    ts = datetime(2026, 9, 1, 8, 15, 0, tzinfo=timezone.utc)
+    device_id = "DEVICE-BLR-01"
+
+    ingest_resp = client.post(
+        "/api/v1/scans/ingest",
+        data={
+            "lat": "12.9716",
+            "lng": "77.5946",
+            "captured_at_utc": ts.isoformat(),
+            "device_id": device_id,
+            "source": "mobile",
+            "auto_process": "false"
+        },
+        files={"image": ("product.jpg", io.BytesIO(dummy_img), "image/jpeg")}
+    )
+    assert ingest_resp.status_code == 201
+    scan_id = ingest_resp.json()["scan_id"]
+    expected_hash = ingest_resp.json()["evidence_hash"]
+
+    # Verify hash
+    verify_resp = client.get(f"/api/v1/scans/{scan_id}/verify-hash")
+    assert verify_resp.status_code == 200, verify_resp.text
+    
+    verify_data = verify_resp.json()
+    print("VERIFY DATA:", verify_data)
+    assert verify_data["scan_id"] == scan_id
+    assert verify_data["is_valid"] is True
+    assert verify_data["expected_hash"] == expected_hash
+    assert verify_data["computed_hash"] == expected_hash
+
