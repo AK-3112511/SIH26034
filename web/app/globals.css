@@ -1,89 +1,165 @@
+/* MetrologyAI global styles — Design System §2, §4, §5 */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  /* Section 2: Color System Tokens */
-  --ink-900: #12203B;
-  --ink-600: #3C4E70;
-  --paper-100: #F1F3F1;
-  --paper-000: #FFFFFF;
-  --brass-500: #A6742C;
-  --verdict-pass: #1E7A4D;
-  --verdict-fail: #B3261E;
-  --verdict-pending: #B5730B;
-  --verdict-neutral: #6B7280;
+/* ─── Base ────────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --font-space-grotesk: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
+    --font-inter: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+    --font-ibm-plex-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  }
 
-  /* Section 3: Typography System */
-  --font-space-grotesk: 'Space Grotesk', system-ui, sans-serif;
-  --font-inter: 'Inter', system-ui, sans-serif;
-  --font-ibm-plex-mono: 'IBM Plex Mono', monospace;
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  /* Visible focus ring on all interactive elements — §10 accessibility */
+  :focus-visible {
+    outline: 2px solid #A6742C;
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
 }
 
-body {
-  background-color: var(--paper-100);
-  color: var(--ink-900);
-  font-family: var(--font-inter);
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+/* ─── Components ──────────────────────────────────────────────────────────── */
+@layer components {
+  /* Card surface — §5.3 */
+  .card-surface {
+    @apply bg-white border border-ink-900/[0.08] rounded-[4px] p-4;
+  }
+
+  /* Form input — §5.6: label above, brass-500 focus, error state, 48px min touch target */
+  .form-input {
+    @apply w-full border border-ink-600/30 rounded-[4px] px-3 py-2 min-h-[48px]
+           font-body text-sm text-ink-900 bg-white
+           transition-colors duration-150
+           focus:outline-none focus:border-brass-500 focus:ring-1 focus:ring-brass-500;
+  }
+  .form-input-error {
+    @apply border-verdict-fail ring-1 ring-verdict-fail;
+  }
+
+  /* Form label — always above, never placeholder-as-label §5.6 */
+  .form-label {
+    @apply block font-body text-xs font-semibold text-ink-600 uppercase tracking-wider mb-1;
+  }
+
+  /* Primary button — §5.2 ink-900 fill, used once per screen */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2
+           bg-ink-900 text-white font-body text-sm font-semibold
+           px-4 py-2 rounded-[4px] min-h-[48px]
+           transition-colors duration-150 hover:bg-ink-600
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-500 focus-visible:ring-offset-2
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Secondary button — §5.2 */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2
+           bg-white text-ink-900 font-body text-sm font-semibold
+           border border-ink-900 px-4 py-2 rounded-[4px] min-h-[48px]
+           transition-colors duration-150 hover:bg-paper-100
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-500 focus-visible:ring-offset-2
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Accent button — §5.2: brass-500, reserved for signature CTA, max once per screen */
+  .btn-accent {
+    @apply inline-flex items-center justify-center gap-2
+           text-white font-body text-sm font-semibold
+           px-4 py-2 rounded-[4px] min-h-[48px]
+           transition-colors duration-150
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-500 focus-visible:ring-offset-2
+           disabled:opacity-40 disabled:cursor-not-allowed;
+    background-color: #A6742C;
+  }
+  .btn-accent:hover:not(:disabled) {
+    background-color: #8a5f22;
+  }
+
+  /* Status chip — §5.4: flat pill for sync/queue status, distinct from Seal Badge */
+  .status-chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+           font-body text-xs font-medium border;
+  }
+
+  /* Data table — §5.5: zebra stripe at 4% ink-900 tint, mono numeric columns */
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table thead th {
+    @apply px-3 py-2 text-left font-body text-xs font-semibold text-ink-600
+           uppercase tracking-wider border-b border-ink-900/10
+           select-none;
+  }
+  .data-table tbody tr:nth-child(odd) {
+    background-color: rgba(18, 32, 59, 0.04); /* 4% ink-900 tint */
+  }
+  .data-table tbody tr {
+    @apply transition-colors;
+  }
+  .data-table tbody tr:hover {
+    background-color: rgba(18, 32, 59, 0.08);
+  }
+  .data-table tbody td {
+    @apply px-3 py-2 border-b border-ink-900/[0.06];
+  }
+
+  /* Calibration ruler — replaced by <CalibrationRuler /> component */
+  .calibration-ruler {
+    width: 100%;
+    height: 10px;
+    background: repeating-linear-gradient(
+      90deg,
+      #A6742C 0px, #A6742C 1px,
+      transparent 1px, transparent 7px,
+      #A6742C 7px, #A6742C 8px,
+      transparent 8px, transparent 15px
+    );
+    border-top: 2px solid #A6742C;
+  }
 }
 
-/* Section 1 & 4: Signature Element - The Calibration Tick Rule Motif */
-.calibration-ruler {
-  height: 2px;
-  background-color: var(--brass-500);
-  background-image: repeating-linear-gradient(
-    90deg,
-    var(--ink-900),
-    var(--ink-900) 2px,
-    transparent 2px,
-    transparent 8px
-  );
-  margin: 1.5rem 0;
+/* ─── Utilities ───────────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Mono data — §3: tabular figures, slight letter-spacing */
+  .font-data {
+    font-family: var(--font-ibm-plex-mono), 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-/* Section 1 & 5.1: Signature Element - The Seal Badge */
-.seal-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
-  border: 1px solid var(--brass-500);
-  font-weight: 600;
-  font-size: 0.875rem;
-  font-family: var(--font-inter);
-  line-height: 1;
+/* ─── Seal Badge stamp animation — §7 Motion ─────────────────────────────── */
+@keyframes seal-stamp {
+  0%   { transform: scale(0.9); }
+  75%  { transform: scale(1.04); }
+  100% { transform: scale(1.0); }
 }
 
-.seal-badge-pass {
-  background-color: rgba(30, 122, 77, 0.12);
-  color: var(--verdict-pass);
-  border-color: var(--brass-500);
+.seal-stamp-anim {
+  animation: seal-stamp 200ms ease-out forwards;
 }
 
-.seal-badge-fail {
-  background-color: rgba(179, 38, 30, 0.12);
-  color: var(--verdict-fail);
-  border-color: var(--brass-500);
+@media (prefers-reduced-motion: reduce) {
+  .seal-stamp-anim {
+    animation: none;
+  }
 }
 
-.seal-badge-pending {
-  background-color: rgba(181, 115, 11, 0.12);
-  color: var(--verdict-pending);
-  border-color: var(--brass-500);
+/* ─── Drag-and-drop zone ──────────────────────────────────────────────────── */
+.dropzone {
+  @apply border-2 border-dashed border-ink-600/30 rounded-[4px]
+         flex flex-col items-center justify-center gap-3
+         p-8 text-center cursor-pointer transition-colors duration-150;
 }
-
-.seal-badge-neutral {
-  background-color: rgba(107, 114, 128, 0.12);
-  color: var(--verdict-neutral);
-  border-color: var(--brass-500);
-}
-
-/* Section 5.3: Cards */
-.card-surface {
-  background-color: var(--paper-000);
-  border: 1px solid rgba(60, 78, 112, 0.08);
-  border-radius: 4px;
-  padding: 1rem;
+.dropzone.dragover {
+  @apply border-brass-500 bg-brass-500/5;
 }

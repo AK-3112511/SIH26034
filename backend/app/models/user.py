@@ -32,7 +32,12 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[UserRole] = mapped_column(
-        ENUM(UserRole, name="user_role_enum", create_type=False),
+        ENUM(
+            UserRole,
+            name="user_role_enum",
+            create_type=False,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False
     )
     district: Mapped[str | None] = mapped_column(Text, nullable=True)
