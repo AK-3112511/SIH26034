@@ -1,3 +1,4 @@
+"""Phase 4: adds assigned_lmo_id and reviewer_note columns to Scan model."""
 from __future__ import annotations
 
 import uuid
@@ -52,21 +53,28 @@ class Scan(Base):
         server_default=func.now(),
         nullable=False
     )
+    # Phase 4: reviewer assignment — who is handling this scan's review
+    assigned_lmo_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True
+    )
+    # Phase 4: mandatory reviewer note when submitting a decision
+    reviewer_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    extracted_fields: Mapped[List[ExtractedField]] = relationship(
+    extracted_fields: Mapped[List["ExtractedField"]] = relationship(
         "ExtractedField",
         back_populates="scan",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
-    rule_results: Mapped[List[RuleResult]] = relationship(
+    rule_results: Mapped[List["RuleResult"]] = relationship(
         "RuleResult",
         back_populates="scan",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
-    challans: Mapped[List[Challan]] = relationship(
+    challans: Mapped[List["Challan"]] = relationship(
         "Challan",
         back_populates="scan",
         cascade="all, delete-orphan",

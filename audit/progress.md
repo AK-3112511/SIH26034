@@ -432,6 +432,261 @@ Cannot be re-run from Windows host. Re-verify on Android device before SIH submi
 
 **Phase 2 is complete. Cleared for Phase 3.**
 
+---
+
+## Log Entry #013 — Phase 4.1: Web Dashboard Login Screen, AppShell Layout (§4.2) & Auth RBAC Verification
+**Date:** 2026-09-13
+**Author:** MetrologyAI Web & Security Architect
+**Status:** ✅ Login Screen, AppShell Nav (§4.2 Sketch), Token Wire-Up & RBAC Verification Complete
+
+### 1. Web Dashboard Login Screen (`web/app/login/page.tsx`)
+- **Design Tokens Adherence (§2, §3, §4):**
+  - Colors: Background in `paper-100` (`#F1F3F1`), header text in `ink-900` (`#12203B`), secondary in `ink-600` (`#3C4E70`), accents in `brass-500` (`#A6742C`), failure alerts in `verdict-fail` (`#B3261E`).
+  - Typography: Titles in `font-display` (Space Grotesk), body/inputs in `font-body` (Inter), status/codes in `font-mono` (IBM Plex Mono).
+  - Component Motifs: Signature `CalibrationRuler` (brass-500 millimeter ticks) framed at section boundaries; `card-surface` with 4px corner radius.
+  - Form Fields (§5.6): Form label placed strictly above inputs, 48px minimum touch targets (`min-h-[48px]`), brass-500 focus rings, and explicit error explanations rather than unadorned red borders.
+- **Role Rejection UX:**
+  - When a `field_lmo` logs in, auth context catches role mismatch and displays:
+    `"Dashboard access requires Senior LMO or Admin role. Field LMO accounts are mobile-only — use the MetrologyAI mobile app."`
+  - Rejection query parameter (`/login?rejected=1`) auto-triggers explicit guidance for redirected non-dashboard users.
+
+### 2. Main App Shell Layout (`web/app/components/AppShell.tsx`)
+- **Nav Header per §4.2 Layout Sketch:**
+  - Header layout faithfully reflects §4.2 sketch:
+    `MetrologyAI Dashboard          [Overview] [Review Queue*] [Repository] [Admin]  👤`
+  - Rendered items:
+    - `Overview` (`/`)
+    - `Review Queue*` (`/queue`) featuring the signature `*` asterisk indicator per the §4.2 sketch.
+    - `Repository` (`/repository`), `E-Commerce` (`/ecommerce`), `Challans` (`/challans`).
+    - `Admin` (`/admin/rulesets`) strictly gated to `admin` role (hidden for `senior_lmo`).
+  - User profile area: User icon `👤` (`lucide-react/User`), officer name, uppercase role pill (`font-mono text-xs text-brass-500`), and accessible sign-out button (`LogOut`).
+  - Structural boundary: Full-width `CalibrationRuler` dividing header from page content and footer.
+- **Client Route Guarding:**
+  - Unauthenticated users redirected to `/login`.
+  - Non-dashboard users (`field_lmo`) redirected to `/login?rejected=1`.
+  - Hydration purge ensures no `field_lmo` JWT remains stored in web `localStorage`.
+
+### 3. Backend Integration & CORS (`backend/app/main.py`)
+- Configured FastAPI `CORSMiddleware` with `allow_origins=["*"]`, enabling browser HTTP clients to authenticate against `/api/v1/auth/login`.
+
+### 4. Files Created / Modified
+- Modified: [web/app/login/page.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/login/page.tsx) — Login UI, credential inputs, role rejection messaging.
+- Modified: [web/app/components/AppShell.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/components/AppShell.tsx) — Header sketch layout, role-based nav filtering, Review Queue* star.
+- Modified: [web/lib/auth-context.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/lib/auth-context.tsx) — Purge and rejection of `field_lmo` tokens on login and hydration.
+- Modified: [web/app/globals.css](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/globals.css) — Added 48px minimum touch target to `.form-input`.
+- Modified: [web/package.json](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/package.json) — Added `npm test` script using Node test runner.
+- Created: [web/tests/auth_and_shell.test.mjs](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/tests/auth_and_shell.test.mjs) — 9 automated tests for auth, role rejection, hydration, and §4.2 navigation.
+- Modified: [backend/app/main.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/app/main.py) — Added `CORSMiddleware`.
+- Created: [backend/tests/test_web_dashboard_auth_integration.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/tests/test_web_dashboard_auth_integration.py) — 3 automated pytest integration tests confirming `/auth/login` token issuance and role gating.
+
+### 5. Verification Results
+- **Web Test Suite (`npm test`):** ✅ **9/9 tests passing**
+  - `senior_lmo login succeeds and grants dashboard access`
+  - `admin login succeeds and grants dashboard access`
+  - `field_lmo login is REJECTED with FIELD_LMO_REJECTED error and stores nothing`
+  - `hydration purges any stored field_lmo token and denies dashboard access`
+  - `hydration restores senior_lmo session`
+  - `senior_lmo sees Overview, Review Queue*, Repository, E-Commerce, Challans (NO Admin)`
+  - `admin sees all nav items including Admin`
+  - `field_lmo has zero visible dashboard nav items`
+  - `route guard redirects unauthenticated users to /login`
+- **Backend Test Suite (`pytest`):** ✅ **10/10 tests passing**
+  - 7/7 in `backend/tests/test_auth.py`
+  - 3/3 in `backend/tests/test_web_dashboard_auth_integration.py` (`senior_lmo` granted, `admin` granted, `field_lmo` rejected for dashboard access)
+- **Next.js Production Build (`npm run build`):** ✅ **Compiled successfully (exit code 0)**
+
+### 6. Blueprint Deviations
+- None. Followed §4.2 sketch and Phase 0.2 tokens faithfully. Added CORSMiddleware to backend to enable web-to-backend communication.
+
+### 7. Remaining Open / Next Phase
+- Cleared for Phase 4.2 / Phase 4.3 (Overview Screen and Review Queue).
+
+---
+
+## Log Entry #014 — Phase 4.3: Review Queue Screen & Real PENDING_REVIEW Backend Integration
+**Date:** 2026-09-13
+**Author:** MetrologyAI Web & Backend Architect
+**Status:** ✅ Review Queue Screen, §4.2 Filter Sketch, Single-Item Review Invariant & Real Backend Querying Implemented and Verified
+
+### 1. Review Queue Screen Architecture (`web/app/queue/page.tsx`)
+- **Layout Fidelity to §4.2 Sketch:**
+  - Header structure:
+    `Filter: [District ▾] [Confidence ▾] [Age ▾]     [Search]`
+  - List structure:
+    `🖼  Parle-G 100g        Chennai, TN     2h ago   [Review]`
+    `🖼  Amul Butter 500g    Coimbatore      5h ago   [Review]`
+    `🖼  Maggi Noodles 70g   Madurai         1d ago   [Review]`
+- **Filter Bar Controls:**
+  - `[District ▾]`: Select dropdown (`All Districts`, `Chennai, TN`, `Coimbatore, TN`, `Madurai, TN`, `Salem, TN`).
+  - `[Confidence ▾]`: Dropdown (`Largest Gap First`, `Smallest Gap First`, `Critical Gap >30%`, `Moderate Gap 15–30%`, `Low Gap <15%`).
+  - `[Age ▾]`: Dropdown (`Newest First`, `Oldest First (>24h)`, `Captured Today (<24h)`).
+  - `[Search]`: Real-time text search for product name, brand, or scan ID.
+- **Strict Single-Review Invariant (§3 & §4.2):**
+  - **Zero bulk selection UI** — no checkboxes, no "Select All", no batch adjudication actions.
+  - Prominent legal disclaimer banner: *"Single Selection Only: Individual adjudication per Legal Metrology Act (no bulk actions)."*
+  - Each item provides an individual, single-action `[Review →]` button navigating to `/queue/{scan_id}`.
+- **Design Tokens Adherence (§2, §3, §4, §5):**
+  - Colors: Background `paper-100` (`#F1F3F1`), card surfaces `card-surface` with 4px border radius, headers in `ink-900`, secondary copy in `ink-600`, critical gap alert in `verdict-fail` (`#B3261E`), brass accents in `brass-500` (`#A6742C`).
+  - Typography: Titles in `font-display` (Space Grotesk), body/labels in `font-body` (Inter), confidence gap and relative time in `font-mono` (IBM Plex Mono).
+  - Divider: Structural `CalibrationRuler` dividing header from filter controls.
+  - Interactive states: 48px/36px touch targets with `brass-500` focus-visible outlines.
+
+### 2. Backend Scans API & Seed Data (`/backend`)
+- **District Resolution & Filter (`backend/app/routers/scans.py`):**
+  - Added `_resolve_district_label()` extracting district from assigned officer or GPS coordinate bounding boxes (`Chennai, TN`, `Coimbatore, TN`, `Madurai, TN`, `Salem, TN`).
+  - Added `district` query filter on `GET /api/v1/scans/` supporting case-insensitive district matching.
+  - Added `q` search parameter filtering across extracted field texts and scan UUIDs.
+  - Populated `district_label` on all returned `ScanListItem` records.
+- **Realistic PENDING_REVIEW Fixture (`backend/app/db/seed_scans.py`):**
+  - Created seeder populating realistic test items for Chennai, Coimbatore, Madurai, and Salem matching the §4.2 canonical examples with extracted fields and confidence gaps.
+
+### 3. Files Created / Modified
+- Modified: [web/app/queue/page.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/queue/page.tsx) — Review queue UI adhering to §4.2 sketch, filter bar, table, single-review enforcement.
+- Modified: [web/lib/api.ts](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/lib/api.ts) — Added `q` search param to `scansApi.list()`.
+- Created: [web/tests/review_queue.test.mjs](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/tests/review_queue.test.mjs) — 6 unit/integration tests for queue layout, filtering, sorting, and no-bulk-actions invariant.
+- Modified: [backend/app/routers/scans.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/app/routers/scans.py) — District resolution, search query filter, district filter, and sorting.
+- Created: [backend/app/db/seed_scans.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/app/db/seed_scans.py) — Realistic seed fixture for `PENDING_REVIEW` scans across districts.
+- Created: [backend/tests/test_review_queue_api.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/tests/test_review_queue_api.py) — 5 pytest tests for review queue list, district filtering, sorting, and search.
+
+### 4. Verification Results
+- **Web Test Suite (`npm test` in `/web`):** ✅ **15/15 tests passing**
+  - 9 tests in `auth_and_shell.test.mjs`
+  - 6 tests in `review_queue.test.mjs`:
+    - `queue displays items per §4.2 sketch format (Product, District, Relative Age)`
+    - `filtering by district correctly isolates district items`
+    - `sorting by confidence gap puts highest gap first`
+    - `sorting by age in both directions works accurately`
+    - `search query filters by product name or scan ID`
+    - `strict invariant: one-at-a-time selection only (no bulk selection)`
+- **Backend Test Suite (`pytest` in `/backend`):** ✅ **15/15 tests passing**
+  - 7 in `test_auth.py`
+  - 3 in `test_web_dashboard_auth_integration.py`
+  - 5 in `test_review_queue_api.py`:
+    - `test_list_pending_review_scans`
+    - `test_filter_by_district`
+    - `test_sort_by_confidence_gap`
+    - `test_sort_by_age`
+    - `test_search_by_query`
+- **Next.js Production Build (`npm run build` in `/web`):** ✅ **Compiled successfully (exit code 0)**
+
+### 5. Blueprint Deviations
+- None. Implemented strictly according to §3 screen 3, §4.2 layout sketch, and Phase 0.2 design tokens.
+
+### 6. Remaining Open / Next Phase
+- Cleared for Phase 4.4 (Scan Detail screen with bounding box overlay and Section 39 challan generation).
+
+---
+
+## Log Entry #015 — Scan Detail Screen Implementation (§3 Screen 4 & §4.3 Layout Sketch)
+**Date:** 2026-09-13
+**Author:** MetrologyAI Lead Full-Stack Architect
+**Status:** ✅ Scan Detail Screen Implemented & Verified in `/web` and `/backend`
+
+### 1. Web Scan Detail Screen (`/web`)
+- **Route & Layout (`web/app/queue/[id]/page.tsx`):**
+  - **Header & Navigation (§4.3):** `← Back to Queue` breadcrumb navigation, scan UUID display, and verdict status indicator with double concentric ring `SealBadge` component (`size={48}`) from §5.1.
+  - **Chain-of-Custody Compliant Bounding Box Overlay (§2.1):**
+    - Raw full-res evidence image rendered untouched in container.
+    - Stored bounding box coordinates (`{x1, y1, x2, y2}`) rendered via client-side SVG/HTML overlay (NOT burned into image pixels, preserving Section 65B hash integrity).
+    - Bi-directional interactive hover highlighting: hovering over an extracted field in the table highlights its bounding box on the image, and hovering on the image box highlights the field.
+    - Evidence footer displays Section 65B SHA-256 evidence hash, mm/px calibration ratio, and PDP area in cm².
+  - **Statutory Rule Results Table (§4.3):**
+    - Displays all 5 core Legal Metrology statutory rules: `6(1)(a)` (Manufacturer details), `6(1)(c)` (Standard metric units), `6(1)(e)` (MRP tax phrase), `6(1)(g)` (Consumer care), and `Schedule II` (Font/area ratio).
+    - Status chips using `VerdictChip` (`PASS`, `FAIL`, `UNVERIFIED`) with detailed evidence and violation reasoning.
+  - **Extracted Fields & Overrides (§3 & §4.3):**
+    - Tabular display of extracted fields with OCR confidence, semantic confidence, and calibrated numeral font heights in mm.
+    - Inline `[Override]` controls allowing senior LMOs to correct OCR values. Overridden fields are highlighted with blue badges.
+  - **Mandatory Reviewer Note & Adjudication Submission:**
+    - Verdict selector (`PASSED` / `FAILED`) with mandatory reviewer note textarea.
+    - Rejection of empty or whitespace-only reviewer notes enforced at both client and API levels.
+    - Wires to `POST /api/v1/scans/{scan_id}/review`, updating scan status, storing reviewer notes and overridden fields, and committing audit log entries.
+  - **Disabled Challan Action (§4.3 & Phase 5):**
+    - "Generate Section 39 Challan" button present per layout sketch, with `disabled={true}`, aria-disabled attributes, and an explicit `(Enabled in Phase 5)` indicator.
+
+### 2. Backend Scans API & Seeder (`/backend`)
+- **Seed Fixture Update (`backend/app/db/seed_scans.py`):**
+  - Populated realistic bounding box coordinate rectangles (`bbox`) on all seed extracted fields.
+  - Included all 5 statutory rules (`6.1.a`, `6.1.c`, `6.1.e`, `6.1.g`, `schedule_ii`) for all sample items.
+- **Review Decision Endpoint (`backend/app/routers/scans.py`):**
+  - Validated `POST /api/v1/scans/{scan_id}/review` enforcing non-empty `reviewer_note`, status transitions, field override updates (with `ocr_confidence = 1.0` for vouched fields), and audit logging.
+
+### 3. Files Created / Modified
+- Created: [web/app/queue/[id]/page.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/queue/[id]/page.tsx) — Scan Detail Screen per §3 Screen 4 and §4.3 layout sketch.
+- Created: [web/tests/scan_detail.test.mjs](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/tests/scan_detail.test.mjs) — 6 unit tests verifying bounding box coordinate mapping, statutory rule ingestion, mandatory reviewer note validation, field override state, disabled challan button, and Seal Badge geometry.
+- Modified: [backend/app/db/seed_scans.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/app/db/seed_scans.py) — Realistic bounding boxes and 5 statutory rules seeded for review items.
+- Modified: [backend/tests/test_review_queue_api.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/tests/test_review_queue_api.py) — Added test `test_scan_detail_and_review_decision` validating GET detail and POST review decision.
+
+### 4. Verification Results
+- **Web Test Suite (`npm test` in `/web`):** ✅ **21/21 tests passing**
+  - 9 tests in `auth_and_shell.test.mjs`
+  - 6 tests in `review_queue.test.mjs`
+  - 6 tests in `scan_detail.test.mjs`:
+    - `Chain-of-Custody Invariant: bbox coordinates are positioned client-side over raw image`
+    - `Rule results consume all §4.3 statutory rules (6.1.a, 6.1.c, 6.1.e, 6.1.g, schedule_ii)`
+    - `Mandatory Reviewer Note invariant: empty or whitespace note is rejected`
+    - `Editable field overrides correctly capture updated values`
+    - `Generate Section 39 Challan button is present but strictly disabled until Phase 5`
+    - `§5.1 Seal Badge renders double concentric ring with brass-500 outer stroke`
+- **Backend Test Suite (`pytest` in `/backend`):** ✅ **6/6 tests passing** in `test_review_queue_api.py` (and 15/15 passing across auth suites).
+- **Next.js Production Build (`npm run build` in `/web`):** ✅ **Compiled successfully (exit code 0)** with dynamic route `/queue/[id]` generated.
+
+### 5. Blueprint Deviations
+- None. Fully adheres to §2.1 chain of custody, §3 screen 4, §4.3 layout sketch, and §5.1 Seal Badge.
+
+### 6. Remaining Open / Next Phase
+- Cleared for Phase 4.5 / Phase 5: Section 39 Challan PDF Generation, SHA-256 hash vaulting, and digital signature attachment.
+
+---
+
+## Log Entry #016 — E-Commerce Ingestion Screen & Manual-Dimension Calibration (§3.2 & §3 Screen 5)
+**Date:** 2026-09-13
+**Author:** MetrologyAI Lead Full-Stack Architect
+**Status:** ✅ E-Commerce Ingestion Implemented & Verified in `/web` and `/backend`
+
+### 1. Web E-Commerce Ingestion Screen (`/web`)
+- **Route & Layout (`web/app/ecommerce/page.tsx`):**
+  - **Drag-and-Drop Upload Zone:** Implemented `.dropzone` styling with interactive drag-over states, browse file selector, image type validation (PNG, JPEG, WebP), file size and name metadata display, and image preview with clear/remove button.
+  - **Platform Tagging:** Dropdown choices for Indian quick-commerce / e-commerce platforms (`Blinkit`, `Amazon India`, `Flipkart`, `Zepto`, `Swiggy Instamart`, `BigBasket / BB Now`, `Other`) with conditional custom platform text input and optional product listing URL.
+  - **Manual Dimension Form (§3.2):**
+    - Inputs for package face height (mm), face width (mm), optional depth (mm), and declared net quantity.
+    - Live client-side calculation preview of the Principal Display Panel (PDP) area: $\text{PDP Area (cm}^2) = \frac{\text{Height (mm)} \times \text{Width (mm)}}{100}$ per PCR Schedule II.
+  - **Submission & Plumbing:**
+    - Dispatches multipart form data to central `POST /api/v1/scans/ingest-derived` endpoint.
+    - On success, renders verification card with Scan ID, calculated PDP area, and direct `[Inspect in Scan Detail →]` action link to `/queue/{scan_id}`.
+
+### 2. Backend Manual Dimension Calibration Path (`/backend`)
+- **Endpoint Update (`backend/app/routers/scans.py`):**
+  - In `ingest_derived_scan`, added the manual-dimension calibration path as described in §3.2 as an alternate input to the ratio calculation:
+    - Automatically opens uploaded screenshot to extract image dimensions $(W, H)$.
+    - Computes `mm_per_px = max(package_height_mm, package_width_mm) / max(W, H)`.
+    - Computes `pdp_area_cm2 = (package_height_mm * package_width_mm) / 100.0`.
+    - Persists computed `mm_per_px` and `pdp_area_cm2` directly on the `Scan` record, seamlessly feeding into the standard downstream compliance evaluation without branching into a separate pipeline.
+
+### 3. Files Created / Modified
+- Created: [web/app/ecommerce/page.tsx](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/app/ecommerce/page.tsx) — E-Commerce Ingestion Screen per §3 Screen 5.
+- Created: [web/tests/ecommerce_ingestion.test.mjs](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/web/tests/ecommerce_ingestion.test.mjs) — 4 unit tests verifying platform selection, manual dimension calculation math, validation, and multipart form fields.
+- Modified: [backend/app/routers/scans.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/app/routers/scans.py) — Integrated manual-dimension calibration ratio and PDP area computation into `ingest_derived_scan`.
+- Modified: [backend/tests/test_review_queue_api.py](file:///c:/Users/gargi/OneDrive/Pictures/Documents/New%20folder/project/SIH26034/backend/tests/test_review_queue_api.py) — Added test `test_ecommerce_ingest_derived_manual_calibration` verifying endpoint returns 201, computes `mm_per_px = 0.2` and `pdp_area_cm2 = 200.0 cm²`.
+
+### 4. Verification Results
+- **Web Test Suite (`npm test` in `/web`):** ✅ **25/25 tests passing** across 5 test suites:
+  - `auth_and_shell.test.mjs` (9/9)
+  - `ecommerce_ingestion.test.mjs` (4/4)
+  - `review_queue.test.mjs` (6/6)
+  - `scan_detail.test.mjs` (6/6)
+- **Backend Test Suite (`pytest` in `/backend`):** ✅ **7/7 tests passing** in `test_review_queue_api.py` (and 15/15 passing in auth test suites).
+- **Next.js Production Build (`npm run build` in `/web`):** ✅ **Compiled successfully (exit code 0)** with static route `/ecommerce` generated.
+
+### 5. Blueprint Deviations
+- None. Follows §3.2 and §3 Screen 5 strictly.
+
+### 6. Remaining Open / Next Phase
+- Cleared for Phase 5: Section 39 Challan PDF Generation and signing.
+
+
+
+
+
 
 
 
