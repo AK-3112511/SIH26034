@@ -188,3 +188,151 @@ export const challansApi = {
   generate: (scan_id: string) =>
     api.post<ChallanResponse>("/challans/generate", { scan_id }),
 };
+
+// ─── Dashboard (§7.1 GIS heatmap) ──────────────────────────────────────────────
+
+export interface HeatmapCluster {
+  lat: number;
+  lng: number;
+  count: number;
+  severity: "FAIL" | "PENDING" | "PASS";
+  pass_count: number;
+  fail_count: number;
+  pending_count: number;
+}
+
+export interface HeatmapResponse {
+  clusters: HeatmapCluster[];
+  zoom: number;
+  total_points: number;
+}
+
+export const dashboardApi = {
+  /** Server-side PostGIS-clustered points — never raw unclustered scans. */
+  heatmap: (params: { zoom?: number; bbox?: string }) =>
+    api.get<HeatmapResponse>("/dashboard/heatmap", { params }),
+};
+
+// ─── Products (§10 Digital Repository / Product Search) ───────────────────────
+
+export interface ProductScanEntry {
+  scan_id: string;
+  status: string;
+  district_label: string | null;
+  captured_at_utc: string | null;
+  created_at: string;
+  image_url: string;
+}
+
+export interface ProductSearchResult {
+  manufacturer_name: string;
+  total_scans: number;
+  passed_count: number;
+  failed_count: number;
+  pending_review_count: number;
+  other_count: number;
+  pass_rate: number | null;
+  trend: "IMPROVING" | "WORSENING" | "STABLE" | "INSUFFICIENT_DATA";
+  first_scan_at: string;
+  last_scan_at: string;
+  scans: ProductScanEntry[];
+}
+
+export interface ProductSearchResponse {
+  query: string | null;
+  results: ProductSearchResult[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const productsApi = {
+  search: (params: { q?: string; page?: number; page_size?: number }) =>
+    api.get<ProductSearchResponse>("/products/search", { params }),
+};
+
+// ─── Admin: Ruleset Config (§3 Screen 8) ───────────────────────────────────────
+
+export interface ScheduleIIBand {
+  max_area_cm2: number | null;
+  min_font_mm: number;
+  description: string;
+}
+
+export interface RulesetVersion {
+  version: string;
+  effective_date: string;
+  is_placeholder: boolean;
+  notice: string;
+  bands: ScheduleIIBand[];
+  is_active: boolean;
+  created_by_id: string | null;
+  created_at: string;
+}
+
+export interface RulesetVersionListResponse {
+  versions: RulesetVersion[];
+}
+
+export const adminRulesetsApi = {
+  list: () => api.get<RulesetVersionListResponse>("/admin/rulesets"),
+  create: (
+    payload: {
+      version: string;
+      effective_date: string;
+      is_placeholder: boolean;
+      notice: string;
+      bands: ScheduleIIBand[];
+    },
+    activate: boolean
+  ) => api.post<RulesetVersion>("/admin/rulesets", payload, { params: { activate } }),
+  activate: (version: string) =>
+    api.post<RulesetVersion>(`/admin/rulesets/${encodeURIComponent(version)}/activate`),
+};
+
+// ─── Admin: User Management (§3 Screen 9) ──────────────────────────────────────
+
+export interface UserListResponse {
+  users: UserResponse[];
+}
+
+export const adminUsersApi = {
+  list: () => api.get<UserListResponse>("/admin/users"),
+  create: (payload: {
+    username: string;
+    email: string;
+    password: string;
+    full_name: string;
+    role: "field_lmo" | "senior_lmo" | "admin";
+    district?: string | null;
+  }) => api.post<UserResponse>("/admin/users", payload),
+  update: (
+    userId: string,
+    payload: { role?: string; district?: string | null; is_active?: boolean }
+  ) => api.patch<UserResponse>(`/admin/users/${userId}`, payload),
+};
+
+// ─── Admin: Audit Log (§3 Screen 10) — read-only ───────────────────────────────
+
+export interface AuditLogEntry {
+  id: string;
+  actor_id: string | null;
+  actor_username: string | null;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  timestamp: string;
+  detail: Record<string, unknown> | null;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const adminAuditLogApi = {
+  list: (params: { target_type?: string; action?: string; page?: number; page_size?: number }) =>
+    api.get<AuditLogListResponse>("/admin/audit-log", { params }),
+};

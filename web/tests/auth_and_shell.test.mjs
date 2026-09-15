@@ -181,29 +181,34 @@ describe("AppShell Navigation §4.2 Layout Sketch & RBAC", () => {
     { label: "Repository", href: "/repository", roles: ["senior_lmo", "admin"] },
     { label: "E-Commerce", href: "/ecommerce", roles: ["senior_lmo", "admin"] },
     { label: "Challans", href: "/challans", roles: ["senior_lmo", "admin"] },
-    { label: "Admin", href: "/admin/rulesets", roles: ["admin"] },
+    { label: "Rulesets", href: "/admin/rulesets", roles: ["admin"] },
+    { label: "Users", href: "/admin/users", roles: ["admin"] },
   ];
 
   function getVisibleNav(role) {
     return NAV_ITEMS.filter((item) => item.roles.includes(role));
   }
 
-  test("senior_lmo sees Overview, Review Queue*, Repository, E-Commerce, Challans (NO Admin)", () => {
+  test("senior_lmo sees Overview, Review Queue*, Repository, E-Commerce, Challans (NO admin items)", () => {
     const nav = getVisibleNav("senior_lmo");
     const labels = nav.map((i) => i.label);
     assert.deepEqual(labels, ["Overview", "Review Queue", "Repository", "E-Commerce", "Challans"]);
-    assert.equal(nav.find((i) => i.label === "Admin"), undefined);
+    assert.equal(nav.find((i) => i.label === "Rulesets"), undefined);
+    assert.equal(nav.find((i) => i.label === "Users"), undefined);
 
     // Review Queue has the signature asterisk from §4.2 sketch
     const reviewQueueItem = nav.find((i) => i.label === "Review Queue");
     assert.equal(reviewQueueItem.star, true);
   });
 
-  test("admin sees all nav items including Admin", () => {
+  test("admin sees all nav items including Rulesets and Users (Phase 6.3/6.4)", () => {
     const nav = getVisibleNav("admin");
     const labels = nav.map((i) => i.label);
-    assert.deepEqual(labels, ["Overview", "Review Queue", "Repository", "E-Commerce", "Challans", "Admin"]);
-    assert.ok(nav.find((i) => i.label === "Admin"));
+    assert.deepEqual(labels, [
+      "Overview", "Review Queue", "Repository", "E-Commerce", "Challans", "Rulesets", "Users",
+    ]);
+    assert.ok(nav.find((i) => i.label === "Rulesets"));
+    assert.ok(nav.find((i) => i.label === "Users"));
   });
 
   test("field_lmo has zero visible dashboard nav items", () => {
@@ -216,6 +221,7 @@ describe("AppShell Navigation §4.2 Layout Sketch & RBAC", () => {
       { href: "/repository", phase: "6.2" },
       { href: "/challans", phase: "5.3" },
       { href: "/admin/rulesets", phase: "6.3" },
+      { href: "/admin/users", phase: "6.4" },
     ];
     for (const route of laterPhaseRoutes) {
       assert.ok(route.href.startsWith("/"));
@@ -225,6 +231,7 @@ describe("AppShell Navigation §4.2 Layout Sketch & RBAC", () => {
     assert.ok(hrefs.includes("/repository"));
     assert.ok(hrefs.includes("/challans"));
     assert.ok(hrefs.includes("/admin/rulesets"));
+    assert.ok(hrefs.includes("/admin/users"));
   });
 
   test("route guard redirects unauthenticated users to /login", () => {

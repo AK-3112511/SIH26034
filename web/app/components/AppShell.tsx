@@ -19,7 +19,9 @@ const NAV_ITEMS = [
   { label: "Repository",   href: "/repository",     roles: ["senior_lmo", "admin"] },
   { label: "E-Commerce",   href: "/ecommerce",      roles: ["senior_lmo", "admin"] },
   { label: "Challans",     href: "/challans",        roles: ["senior_lmo", "admin"] },
-  { label: "Admin",        href: "/admin/rulesets",  roles: ["admin"] },
+  { label: "Rulesets",     href: "/admin/rulesets",  roles: ["admin"] },
+  { label: "Users",        href: "/admin/users",     roles: ["admin"] },
+  { label: "Audit Log",    href: "/admin/audit-log", roles: ["admin"] },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
