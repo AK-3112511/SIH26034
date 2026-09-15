@@ -79,11 +79,15 @@ class MasterPipeline:
         extraction_pipeline: ExtractionPipeline | None = None,
         spatial_service: SpatialCalibrationService | None = None,
         rule_engine: ComplianceRuleEngine | None = None,
+        db: Session | None = None,
     ) -> None:
         self.preprocessor = preprocessor or PreprocessingPipeline()
         self.extraction_pipeline = extraction_pipeline or get_extraction_pipeline()
         self.spatial_service = spatial_service or SpatialCalibrationService()
-        self.rule_engine = rule_engine or ComplianceRuleEngine()
+        # Phase 6.3: resolves the admin-activated ruleset version from the DB
+        # when available, so activating a new version takes effect on the
+        # next scan processed without a code deploy.
+        self.rule_engine = rule_engine or ComplianceRuleEngine(db=db)
 
     def execute(
         self,
@@ -223,7 +227,7 @@ def process_scan(
             return scan
 
         # Execute Master Pipeline
-        active_pipeline = pipeline or MasterPipeline()
+        active_pipeline = pipeline or MasterPipeline(db=db)
         result = active_pipeline.execute(image=image)
 
         # 1. Persist Extracted Fields

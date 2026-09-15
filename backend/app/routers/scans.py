@@ -39,6 +39,7 @@ from app.services.hash_vault import compute_section_65b_hash
 from app.models.audit_log import AuditLog
 from app.services.audit import log_audit, log_status_change
 from app.services.pipeline_orchestrator import process_queued_scans, process_scan
+from app.services.district import resolve_district_label
 from app.core.deps import get_current_user, require_senior_lmo
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -46,28 +47,6 @@ router = APIRouter(prefix="/scans", tags=["scans"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _resolve_district_label(scan: Scan, db: Optional[Session] = None) -> Optional[str]:
-    """Resolve human-readable district label from assigned officer or GPS coordinates."""
-    if scan.assigned_lmo_id and db:
-        user = db.query(User).filter(User.id == scan.assigned_lmo_id).first()
-        if user and user.district:
-            return user.district
-
-    if scan.lat is not None and scan.lng is not None:
-        lat, lng = scan.lat, scan.lng
-        if 12.8 <= lat <= 13.4 and 79.8 <= lng <= 80.5:
-            return "Chennai, TN"
-        elif 10.7 <= lat <= 11.4 and 76.7 <= lng <= 77.4:
-            return "Coimbatore, TN"
-        elif 9.6 <= lat <= 10.2 and 77.8 <= lng <= 78.4:
-            return "Madurai, TN"
-        elif 11.4 <= lat <= 11.9 and 77.9 <= lng <= 78.4:
-            return "Salem, TN"
-        return f"{lat:.2f}N, {lng:.2f}E"
-
-    return None
-
 
 def _derive_scan_list_item(scan: Scan, now: datetime, db: Optional[Session] = None) -> ScanListItem:
     """Build a compact queue item from a Scan ORM object."""
@@ -92,7 +71,7 @@ def _derive_scan_list_item(scan: Scan, now: datetime, db: Optional[Session] = No
         delta = now - scan.created_at.replace(tzinfo=timezone.utc) if scan.created_at.tzinfo is None else now - scan.created_at
         age_hours = round(delta.total_seconds() / 3600, 2)
 
-    district_label = _resolve_district_label(scan, db)
+    district_label = resolve_district_label(scan, db)
 
     return ScanListItem(
         scan_id=scan.scan_id,

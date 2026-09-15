@@ -2,15 +2,31 @@
 /**
  * §3 Screen 2 — Overview
  * Today's counts (scanned/passed/failed/pending review) from real scan data.
- * Heatmap is a placeholder per the plan — real PostGIS component comes in Phase 6.
+ * National Heatmap (§7.1) is a real PostGIS-clustered component (Phase 6.1).
  */
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ArrowRight, MapPin, RefreshCw } from "lucide-react";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
 import { SealBadge } from "@/app/components/SealBadge";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
 import { scansApi, type DashboardStats } from "@/lib/api";
+
+const Heatmap = dynamic(
+  () => import("@/app/components/Heatmap").then((m) => m.Heatmap),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="flex items-center justify-center"
+        style={{ minHeight: 420 }}
+      >
+        <span className="font-mono text-sm text-ink-600">Loading map…</span>
+      </div>
+    ),
+  }
+);
 
 function StatCard({
   label,
@@ -147,34 +163,15 @@ export default function OverviewPage() {
 
       <CalibrationRuler className="mb-6" />
 
-      {/* Heatmap placeholder — Phase 6 replaces this with real PostGIS component */}
+      {/* §7.1 National Heatmap — server-side PostGIS-clustered points (Phase 6.1) */}
       <section aria-label="National compliance heatmap">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-display text-lg font-semibold text-ink-900">
             National Heatmap
           </h3>
-          <span className="status-chip text-ink-600 border-ink-600/20 bg-ink-900/5">
-            Phase 6 — Coming soon
-          </span>
         </div>
-        <div
-          className="card-surface flex flex-col items-center justify-center gap-4"
-          style={{ minHeight: 320 }}
-          role="img"
-          aria-label="Heatmap placeholder — PostGIS aggregation not yet implemented"
-        >
-          <MapPin size={40} strokeWidth={1} className="text-ink-600/40" aria-hidden />
-          <div className="text-center">
-            <p className="font-display text-base font-semibold text-ink-600">
-              Heatmap Placeholder
-            </p>
-            <p className="font-body text-sm text-ink-600/70 mt-1 max-w-xs">
-              Real-time PostGIS{" "}
-              <code className="font-mono text-xs">ST_ClusterKMeans</code>{" "}
-              aggregation will render here in Phase 6. Muted basemap with
-              verdict-colored clusters per §9 of the Design System.
-            </p>
-          </div>
+        <div className="card-surface p-0 overflow-hidden">
+          <Heatmap />
         </div>
       </section>
 

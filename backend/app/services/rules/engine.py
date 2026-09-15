@@ -68,8 +68,8 @@ class ComplianceRuleEngine:
     computes the definitive legal status without loss of discrete rule evidence.
     """
 
-    def __init__(self, ruleset_version: str | None = None):
-        self.ruleset: ScheduleIIRuleset = get_active_ruleset(ruleset_version)
+    def __init__(self, ruleset_version: str | None = None, db: Session | None = None):
+        self.ruleset: ScheduleIIRuleset = get_active_ruleset(ruleset_version, db=db)
 
     def evaluate(
         self,
