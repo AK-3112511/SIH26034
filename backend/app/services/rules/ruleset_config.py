@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 @dataclass(frozen=True)
@@ -114,11 +117,55 @@ RULESET_REGISTRY: dict[str, ScheduleIIRuleset] = {
 ACTIVE_RULESET_VERSION = PLACEHOLDER_SCHEDULE_II_V1.version
 
 
-def get_active_ruleset(version: str | None = None) -> ScheduleIIRuleset:
+def _load_from_db(db: Session, version: str | None) -> ScheduleIIRuleset | None:
+    """Phase 6.3: prefer the admin-managed, persisted ruleset table when a db
+    session is available. Local import avoids a service->model->service cycle
+    at module import time.
+    """
+    from app.models.ruleset_version import RulesetVersion
+
+    query = db.query(RulesetVersion)
+    row = (
+        query.filter(RulesetVersion.version == version).first()
+        if version
+        else query.filter(RulesetVersion.is_active.is_(True)).first()
+    )
+    if row is None:
+        return None
+
+    return ScheduleIIRuleset(
+        version=row.version,
+        effective_date=row.effective_date.isoformat(),
+        is_placeholder=row.is_placeholder,
+        notice=row.notice,
+        bands=[
+            ScheduleIIBand(
+                max_area_cm2=b["max_area_cm2"],
+                min_font_mm=b["min_font_mm"],
+                description=b["description"],
+            )
+            for b in row.bands
+        ],
+    )
+
+
+def get_active_ruleset(version: str | None = None, db: Session | None = None) -> ScheduleIIRuleset:
     """
     Retrieves the requested or active versioned Schedule II ruleset.
     Defaults to the current active ruleset if no version is specified.
+
+    When `db` is given, the admin-managed `ruleset_versions` table (Phase
+    6.3) is checked first — this is how activating a new version from the
+    Admin Ruleset Config screen actually takes effect on the next scan
+    processed, without a code deploy. Falls back to the in-memory
+    placeholder registry when no `db` is given (every pre-Phase-6.3 caller)
+    or no matching/active DB row exists yet.
     """
+    if db is not None:
+        db_ruleset = _load_from_db(db, version)
+        if db_ruleset is not None:
+            return db_ruleset
+
     target_version = version or ACTIVE_RULESET_VERSION
     if target_version in RULESET_REGISTRY:
         return RULESET_REGISTRY[target_version]

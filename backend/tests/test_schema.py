@@ -13,7 +13,10 @@ from app.models import Base, Scan
 
 def test_tables_registered():
     table_names = set(Base.metadata.tables.keys())
-    expected = {"scans", "extracted_fields", "rule_results", "challans", "users", "audit_log"}
+    expected = {
+        "scans", "extracted_fields", "rule_results", "challans", "users", "audit_log",
+        "ruleset_versions",
+    }
     assert table_names == expected, f"Expected tables {expected}, but found {table_names}"
 
 def test_users_table_structure():
