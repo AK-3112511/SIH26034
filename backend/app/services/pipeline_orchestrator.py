@@ -14,6 +14,8 @@ from app.models.enums import ScanStatus
 from app.models.extracted_field import ExtractedField
 from app.models.scan import Scan
 from app.services.audit import log_status_change
+from app.services.district import resolve_district_label
+from app.services.events import emit_scan_status_changed
 from app.services.rules.engine import (
     ComplianceRuleEngine,
     ScanComplianceEvaluation,
@@ -278,6 +280,31 @@ def process_scan(
 
         db.commit()
         db.refresh(scan)
+
+        # Emit scan.status_changed event per §6.2
+        rule_summaries = []
+        if result.compliance and result.compliance.rule_results:
+            rule_summaries = [
+                {
+                    "rule_id": r.rule_id,
+                    "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+                    "reason": r.reason,
+                }
+                for r in result.compliance.rule_results
+            ]
+        try:
+            district_label = resolve_district_label(scan, db)
+            emit_scan_status_changed(
+                db=db,
+                scan_id=scan.scan_id,
+                new_status=scan.status.value,
+                rule_results=rule_summaries,
+                assigned_lmo_id=scan.assigned_lmo_id,
+                district=district_label,
+            )
+        except Exception as event_err:
+            logger.warning("Failed to emit scan.status_changed event for %s: %s", scan_id, event_err)
+
         logger.info("process_scan: scan %s processed successfully -> status: %s", scan_id, scan.status.value)
         return scan
 

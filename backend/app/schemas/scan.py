@@ -144,3 +144,21 @@ class HashVerificationResponse(BaseModel):
     is_valid: bool
     expected_hash: str
     computed_hash: str
+
+
+class AssignedScanItem(BaseModel):
+    """Assigned scan/task representation for mobile field LMO per §5.3."""
+    scan_id: uuid.UUID
+    source: ScanSource
+    status: ScanStatus
+    image_url: str
+    product_name: Optional[str] = None
+    platform: Optional[str] = None
+    task_type: str = "field_followup"
+    assigned_at_utc: Optional[datetime] = None
+    reviewer_note: Optional[str] = None
+    instructions: Optional[str] = None
+    rule_violations: List[str] = []
+
+    model_config = ConfigDict(from_attributes=True)
+

@@ -24,7 +24,7 @@ import {
 import { AppShell } from "@/app/components/AppShell";
 import { SealBadge, type VerdictStatus } from "@/app/components/SealBadge";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
-import { scansApi, type ScanListItem } from "@/lib/api";
+import { scansApi, eventsApi, type ScanListItem } from "@/lib/api";
 
 type SortField = "created_at" | "confidence_gap" | "age";
 type SortDir = "asc" | "desc";
@@ -136,6 +136,37 @@ export default function ReviewQueuePage() {
 
   useEffect(() => {
     fetchQueue();
+  }, [fetchQueue]);
+
+  // §6.2 Real-Time Polling Layer (15s interval fallback per blueprint)
+  // Ensures new PENDING_REVIEW scans appear live without a manual refresh (§5.1).
+  useEffect(() => {
+    let lastPollTime: string = new Date().toISOString();
+    let isSubscribed = true;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await eventsApi.poll(lastPollTime);
+        if (!isSubscribed) return;
+
+        if (res.data && res.data.events && res.data.events.length > 0) {
+          lastPollTime = res.data.server_time || new Date().toISOString();
+          const hasStatusChange = res.data.events.some(
+            (e) => e.event_type === "scan.status_changed"
+          );
+          if (hasStatusChange) {
+            fetchQueue();
+          }
+        }
+      } catch {
+        // Background polling errors should not disrupt current UI view
+      }
+    }, 15000); // 15-second polling interval strictly per §6.2
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(intervalId);
+    };
   }, [fetchQueue]);
 
   const handleColumnSort = (field: SortField) => {

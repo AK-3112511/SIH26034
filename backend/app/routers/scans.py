@@ -33,11 +33,13 @@ from app.schemas.scan import (
     DashboardStatsResponse,
     IngestDerivedRequest,
     HashVerificationResponse,
+    AssignedScanItem,
 )
 from app.services.storage import get_storage_provider
 from app.services.hash_vault import compute_section_65b_hash
 from app.models.audit_log import AuditLog
 from app.services.audit import log_audit, log_status_change
+from app.services.events import emit_scan_status_changed
 from app.services.pipeline_orchestrator import process_queued_scans, process_scan
 from app.services.district import resolve_district_label
 from app.core.deps import get_current_user, require_senior_lmo
@@ -520,6 +522,69 @@ def trigger_batch_process_queued(
     return results
 
 
+@router.get("/assigned-to-me", response_model=list[AssignedScanItem])
+def get_scans_assigned_to_me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieve all scans assigned to the authenticated officer for field follow-up per §5.3."""
+    scans = (
+        db.query(Scan)
+        .options(
+            joinedload(Scan.extracted_fields),
+            joinedload(Scan.rule_results),
+        )
+        .filter(Scan.assigned_lmo_id == current_user.id)
+        .order_by(Scan.created_at.desc())
+        .all()
+    )
+
+    items: list[AssignedScanItem] = []
+    for s in scans:
+        product_name = None
+        platform = None
+        instructions = None
+        rule_violations: list[str] = []
+
+        for ef in s.extracted_fields:
+            if ef.field_name in ("net_quantity", "brand_name", "product_name") and ef.raw_text:
+                if product_name is None:
+                    product_name = ef.raw_text
+            if ef.field_name == "declared_dimensions" and ef.raw_text and "platform:" in ef.raw_text:
+                parts = ef.raw_text.split("|")
+                for p in parts:
+                    if "platform:" in p:
+                        platform = p.replace("platform:", "").strip()
+
+        for rr in s.rule_results:
+            if rr.status == RuleStatus.FAIL:
+                rule_violations.append(f"{rr.rule_id}: {rr.reason or 'Statutory declaration non-compliant'}")
+
+        if s.reviewer_note:
+            instructions = s.reviewer_note
+        elif rule_violations:
+            instructions = f"Verify packaging on-site and serve notice: {', '.join(rule_violations)}"
+        else:
+            instructions = "Conduct on-site inspection and verify declared package credentials."
+
+        items.append(
+            AssignedScanItem(
+                scan_id=s.scan_id,
+                source=s.source,
+                status=s.status,
+                image_url=s.image_url,
+                product_name=product_name or ("E-Commerce Package" if s.source == ScanSource.ECOMMERCE else "Field Inspection Item"),
+                platform=platform or ("Blinkit" if s.source == ScanSource.ECOMMERCE else None),
+                task_type="field_followup",
+                assigned_at_utc=s.created_at,
+                reviewer_note=s.reviewer_note,
+                instructions=instructions,
+                rule_violations=rule_violations,
+            )
+        )
+
+    return items
+
 
 @router.get("/{scan_id}", response_model=ScanDetailResponse)
 def get_scan(
@@ -575,8 +640,11 @@ def review_scan(
         )
 
     old_status = scan.status
+    original_field_lmo_id = scan.assigned_lmo_id
     scan.status = body.decision
-    scan.assigned_lmo_id = current_user.id
+    # Keep original field officer assigned, or assign reviewer if unassigned
+    if not scan.assigned_lmo_id:
+        scan.assigned_lmo_id = current_user.id
     scan.reviewer_note = body.reviewer_note
 
     # Apply field overrides if provided
@@ -610,12 +678,35 @@ def review_scan(
         }
     )
 
+    # Emit scan.status_changed event per §6.2
+    rule_summaries = [
+        {
+            "rule_id": rr.rule_id,
+            "status": rr.status.value if hasattr(rr.status, "value") else str(rr.status),
+            "reason": rr.reason,
+        }
+        for rr in (scan.rule_results or [])
+    ]
+    district_label = resolve_district_label(scan, db)
+    try:
+        emit_scan_status_changed(
+            db=db,
+            scan_id=scan.scan_id,
+            new_status=scan.status.value,
+            rule_results=rule_summaries,
+            assigned_lmo_id=original_field_lmo_id or scan.assigned_lmo_id,
+            district=district_label,
+        )
+    except Exception:
+        pass
+
     return ReviewSubmitResponse(
         scan_id=scan.scan_id,
         new_status=scan.status,
         reviewer_note=scan.reviewer_note,
         message="Review submitted successfully"
     )
+
 
 
 # ---------------------------------------------------------------------------

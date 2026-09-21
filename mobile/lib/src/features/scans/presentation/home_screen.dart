@@ -7,10 +7,15 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../../capture/presentation/capture_screen.dart';
 import '../../notifications/presentation/notifications_screen.dart';
+import '../../notifications/services/local_notification_service.dart';
+import '../../notifications/services/notification_service.dart';
 import '../models/capture_item.dart';
 import '../models/capture_record.dart';
+import '../services/assigned_tasks_service.dart';
 import '../services/sync_worker.dart';
 import 'sync_queue_screen.dart';
+
+enum HomeTabFilter { all, myCaptures, assignedToMe }
 
 /// Home / Today's Scans Screen (Mobile UX §2, Screen 2)
 ///
@@ -33,6 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late List<CaptureItem> _captures;
   bool _showingMockData = false;
   late final SyncWorker _syncWorker;
+  late final NotificationService _notificationService;
+  late final AssignedTasksService _assignedTasksService;
+  HomeTabFilter _activeFilter = HomeTabFilter.all;
   int _stuckCount = 0;
 
   @override
@@ -41,16 +49,35 @@ class _HomeScreenState extends State<HomeScreen> {
     _captures = widget.initialCaptures ?? [];
     _syncWorker = SyncWorker();
     _syncWorker.addListener(_onSyncWorkerUpdate);
+    _notificationService = NotificationService();
+    _notificationService.addListener(_onNotificationUpdate);
+    _assignedTasksService = AssignedTasksService();
+    _assignedTasksService.addListener(_onAssignedTasksUpdate);
+
+    // Request Android 13+ runtime POST_NOTIFICATIONS permission
+    LocalNotificationService().requestPermissions();
 
     if (widget.initialCaptures == null) {
       _loadCapturesFromDb();
+      _assignedTasksService.loadLocalTasks();
+      _assignedTasksService.syncRemoteTasks();
     }
   }
 
   @override
   void dispose() {
     _syncWorker.removeListener(_onSyncWorkerUpdate);
+    _notificationService.removeListener(_onNotificationUpdate);
+    _assignedTasksService.removeListener(_onAssignedTasksUpdate);
     super.dispose();
+  }
+
+  void _onAssignedTasksUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  void _onNotificationUpdate() {
+    if (mounted) setState(() {});
   }
 
   void _onSyncWorkerUpdate() {
@@ -58,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadCapturesFromDb();
     }
   }
+
 
   Future<void> _loadCapturesFromDb() async {
     try {
@@ -133,6 +161,105 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  List<CaptureItem> get _allItems {
+    if (_showingMockData) {
+      return [...CaptureItem.mockItems(), ...CaptureItem.mockAssignedTasks()];
+    }
+    if (widget.initialCaptures != null) {
+      return _captures;
+    }
+    return [..._captures, ..._assignedTasksService.assignedItems];
+  }
+
+  List<CaptureItem> get _displayedItems {
+    final all = _allItems;
+    switch (_activeFilter) {
+      case HomeTabFilter.myCaptures:
+        return all.where((c) => !c.isAssignedTask).toList();
+      case HomeTabFilter.assignedToMe:
+        return all.where((c) => c.isAssignedTask).toList();
+      case HomeTabFilter.all:
+        return all;
+    }
+  }
+
+  void _showItemDetails(CaptureItem item) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper000,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.card)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.space3),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      item.isAssignedTask
+                          ? 'Assigned Task Details (§5.3)'
+                          : 'Field Capture Details',
+                      style: AppTypography.base.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const Divider(),
+                const SizedBox(height: AppSpacing.space1),
+                Text(item.productName, style: AppTypography.base.copyWith(fontWeight: FontWeight.w600)),
+                Text(item.category, style: AppTypography.xs.copyWith(color: AppColors.ink600)),
+                const SizedBox(height: AppSpacing.space2),
+                if (item.isAssignedTask && item.followUpNote != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(AppSpacing.space2),
+                    decoration: BoxDecoration(
+                      color: AppColors.paper100,
+                      borderRadius: BorderRadius.circular(AppRadius.card),
+                      border: Border.all(color: AppColors.verdictPending.withValues(alpha: 0.4)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'INSPECTION INSTRUCTIONS',
+                          style: AppTypography.xs.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.verdictPending,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.space05),
+                        Text(item.followUpNote!, style: AppTypography.xs),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.space2),
+                ],
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _handleNewScan();
+                  },
+                  icon: const Icon(Icons.camera_alt, color: AppColors.paper000),
+                  label: Text(item.isAssignedTask ? 'START ON-SITE INSPECTION' : 'RE-SCAN ITEM'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _handleLogout() async {
     await AuthService().logout();
     if (!mounted) return;
@@ -142,10 +269,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
-
-
-
 
   Future<void> _handleNewScan() async {
     await Navigator.of(context).push<Map<String, dynamic>>(
@@ -165,9 +288,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final officerName = user?.fullName.isNotEmpty == true ? user!.fullName : 'Field Officer';
     final district = user?.district?.isNotEmpty == true ? user!.district! : 'Jurisdiction';
 
-    final syncedCount = _captures.where((c) => c.syncStatus == SyncStatus.synced).length;
-    final pendingCount = _captures.where((c) => c.syncStatus == SyncStatus.pendingUpload).length;
-    final failedCount = _captures.where((c) => c.syncStatus == SyncStatus.failed).length;
+    final all = _allItems;
+    final displayed = _displayedItems;
+
+    final myCapturesCount = all.where((c) => !c.isAssignedTask).length;
+    final assignedCount = all.where((c) => c.isAssignedTask).length;
+
+    final syncedCount = displayed.where((c) => c.syncStatus == SyncStatus.synced).length;
+    final pendingCount = displayed.where((c) => c.syncStatus == SyncStatus.pendingUpload).length;
+    final failedCount = displayed.where((c) => c.syncStatus == SyncStatus.failed).length;
 
     return Scaffold(
       backgroundColor: AppColors.paper100,
@@ -181,7 +310,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_outlined, color: AppColors.paper000),
+            icon: Badge(
+              isLabelVisible: _notificationService.unreadCount > 0,
+              label: Text('${_notificationService.unreadCount}'),
+              child: const Icon(Icons.notifications_outlined, color: AppColors.paper000),
+            ),
             onPressed: _openNotifications,
           ),
           IconButton(
@@ -343,7 +476,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         child: Text(
-                          'TOTAL: ${_captures.length}',
+                          'TOTAL: ${displayed.length}',
                           style: AppTypography.dataMono.copyWith(
                             fontSize: 12.0,
                             fontWeight: FontWeight.bold,
@@ -387,13 +520,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                  const SizedBox(height: AppSpacing.space3),
+                  const SizedBox(height: AppSpacing.space2),
+
+                  // Filter Segment Tabs (§5.3: My Captures vs Assigned to Me)
+                  _buildFilterTabs(
+                    allCount: all.length,
+                    myCount: myCapturesCount,
+                    assignedCount: assignedCount,
+                  ),
+
+                  const SizedBox(height: AppSpacing.space2),
 
                   // Captures List or Empty State
-                  if (_captures.isEmpty) ...[
+                  if (displayed.isEmpty) ...[
                     _buildEmptyState(),
                   ] else ...[
-                    ..._captures.map((capture) => _CaptureCard(capture: capture)),
+                    ...displayed.map(
+                      (capture) => _CaptureCard(
+                        capture: capture,
+                        onTap: () => _showItemDetails(capture),
+                      ),
+                    ),
                   ],
 
                   const SizedBox(height: AppSpacing.space2),
@@ -477,6 +624,104 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _buildFilterTabs({
+    required int allCount,
+    required int myCount,
+    required int assignedCount,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.paper000,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.ink600.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          _buildFilterPill(
+            label: 'All',
+            filter: HomeTabFilter.all,
+            count: allCount,
+          ),
+          _buildFilterPill(
+            label: 'My Captures',
+            filter: HomeTabFilter.myCaptures,
+            count: myCount,
+          ),
+          _buildFilterPill(
+            label: 'Assigned to Me',
+            filter: HomeTabFilter.assignedToMe,
+            count: assignedCount,
+            isHighlight: assignedCount > 0,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterPill({
+    required String label,
+    required HomeTabFilter filter,
+    required int count,
+    bool isHighlight = false,
+  }) {
+    final isSelected = _activeFilter == filter;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _activeFilter = filter;
+          });
+        },
+        borderRadius: BorderRadius.circular(AppRadius.card - 2),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.ink900 : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.card - 2),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.xs.copyWith(
+                    color: isSelected
+                        ? AppColors.paper000
+                        : (isHighlight ? AppColors.verdictPending : AppColors.ink900),
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppColors.brass500
+                      : AppColors.ink600.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$count',
+                  style: AppTypography.dataMono.copyWith(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected ? AppColors.ink900 : AppColors.ink900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Metric Counter Card
@@ -538,11 +783,15 @@ class _MetricCard extends StatelessWidget {
 }
 }
 
-/// Capture Item Card with Flat Pill Sync Status Chip (§5.4)
+/// Capture Item Card with Flat Pill Sync Status Chip (§5.4) & Origin Differentiation (§5.3)
 class _CaptureCard extends StatelessWidget {
   final CaptureItem capture;
+  final VoidCallback? onTap;
 
-  const _CaptureCard({required this.capture});
+  const _CaptureCard({
+    required this.capture,
+    this.onTap,
+  });
 
   String _formatTime(DateTime time) {
     final hour = time.hour.toString().padLeft(2, '0');
@@ -554,90 +803,200 @@ class _CaptureCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: AppSpacing.space1),
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.space2),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        capture.productName,
-                        style: AppTypography.base.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.ink900,
-                        ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.space2),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Origin Badge & Status Chip Header (§5.3 Distinction)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (capture.isAssignedTask)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                      decoration: BoxDecoration(
+                        color: AppColors.ink900,
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      const SizedBox(height: AppSpacing.space05),
-                      Text(
-                        capture.category,
-                        style: AppTypography.xs.copyWith(
-                          color: AppColors.ink600,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.assignment_turned_in_outlined,
+                            color: AppColors.brass500,
+                            size: 12,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'ASSIGNED TASK (§5.3)',
+                            style: AppTypography.dataMono.copyWith(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          if (capture.platform != null && capture.platform!.isNotEmpty) ...[
+                            const SizedBox(width: 5),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: AppColors.brass500.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: Text(
+                                capture.platform!.toUpperCase(),
+                                style: AppTypography.dataMono.copyWith(
+                                  fontSize: 9,
+                                  color: AppColors.brass500,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.paper100,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: AppColors.ink600.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.camera_alt_outlined, color: AppColors.ink600, size: 11),
+                          const SizedBox(width: 4),
+                          Text(
+                            'FIELD CAPTURE',
+                            style: AppTypography.dataMono.copyWith(
+                              fontSize: 9,
+                              color: AppColors.ink600,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  // Flat Pill Sync Status Chip per §5.4
+                  StatusChip(status: capture.syncStatus),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.space1),
+
+              // Product Title & Category
+              Text(
+                capture.productName,
+                style: AppTypography.base.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.ink900,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.space05),
+              Text(
+                capture.category,
+                style: AppTypography.xs.copyWith(
+                  color: AppColors.ink600,
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.space2),
+
+              // ID & Timestamp Banner
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.space1),
+                decoration: BoxDecoration(
+                  color: AppColors.paper100,
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      capture.id,
+                      style: AppTypography.dataMono.copyWith(
+                        fontSize: 12.0,
+                        color: AppColors.ink900,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      _formatTime(capture.timestamp),
+                      style: AppTypography.dataMono.copyWith(
+                        fontSize: 12.0,
+                        color: AppColors.ink600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.space1),
+
+              // Location Row
+              Row(
+                children: [
+                  const Icon(
+                    Icons.location_on_outlined,
+                    color: AppColors.ink600,
+                    size: 14.0,
+                  ),
+                  const SizedBox(width: AppSpacing.space05),
+                  Expanded(
+                    child: Text(
+                      capture.location,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.xs.copyWith(
+                        color: AppColors.ink600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              // Statutory Follow-up Action Notice for Assigned Tasks
+              if (capture.isAssignedTask && capture.followUpNote != null) ...[
+                const SizedBox(height: AppSpacing.space1),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.space1,
+                    vertical: AppSpacing.space05,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.verdictPending.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(color: AppColors.verdictPending.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, color: AppColors.verdictPending, size: 13),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          capture.followUpNote!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.xs.copyWith(
+                            color: AppColors.ink900,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: AppSpacing.space1),
-                // Flat Pill Sync Status Chip per §5.4 (distinct from circular Seal Badge)
-                StatusChip(status: capture.syncStatus),
               ],
-            ),
-            const SizedBox(height: AppSpacing.space2),
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.space1),
-              decoration: BoxDecoration(
-                color: AppColors.paper100,
-                borderRadius: BorderRadius.circular(AppRadius.card),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    capture.id,
-                    style: AppTypography.dataMono.copyWith(
-                      fontSize: 12.0,
-                      color: AppColors.ink900,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  Text(
-                    _formatTime(capture.timestamp),
-                    style: AppTypography.dataMono.copyWith(
-                      fontSize: 12.0,
-                      color: AppColors.ink600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpacing.space1),
-            Row(
-              children: [
-                const Icon(
-                  Icons.location_on_outlined,
-                  color: AppColors.ink600,
-                  size: 14.0,
-                ),
-                const SizedBox(width: AppSpacing.space05),
-                Expanded(
-                  child: Text(
-                    capture.location,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.xs.copyWith(
-                      color: AppColors.ink600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

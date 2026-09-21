@@ -4,9 +4,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../features/scans/models/capture_record.dart';
+import '../../features/scans/models/assigned_task_record.dart';
 
 /// Database Helper for Local SQLite captures table
-/// Source: MetrologyAI_Elevated_Blueprint.md §3.1
+/// Source: MetrologyAI_Elevated_Blueprint.md §3.1 & Phase 7.3 §5.3
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
   factory DatabaseHelper() => _instance;
@@ -44,6 +45,34 @@ class DatabaseHelper {
             sync_status TEXT,
             retry_count INTEGER DEFAULT 0,
             server_scan_id TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS assigned_tasks (
+            scan_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL,
+            platform TEXT,
+            location TEXT,
+            assigned_at_utc TEXT,
+            task_type TEXT,
+            status TEXT,
+            instructions TEXT
+          )
+        ''');
+      },
+      onOpen: (db) async {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS assigned_tasks (
+            scan_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL,
+            platform TEXT,
+            location TEXT,
+            assigned_at_utc TEXT,
+            task_type TEXT,
+            status TEXT,
+            instructions TEXT
           )
         ''');
       },
@@ -193,5 +222,57 @@ class DatabaseHelper {
   Future<void> clearAll() async {
     final db = await database;
     await db.delete('captures');
+  }
+
+  // ─── Assigned Tasks (§5.3 Local Persistence) ──────────────────────────────
+
+  /// Insert or update an assigned task record in SQLite
+  Future<void> insertAssignedTask(AssignedTaskRecord task) async {
+    final db = await database;
+    await db.insert(
+      'assigned_tasks',
+      task.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Batch insert assigned tasks from remote sync
+  Future<void> insertAssignedTasks(List<AssignedTaskRecord> tasks) async {
+    final db = await database;
+    final batch = db.batch();
+    for (final task in tasks) {
+      batch.insert(
+        'assigned_tasks',
+        task.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Get all assigned tasks ordered by assignment time
+  Future<List<AssignedTaskRecord>> getAllAssignedTasks() async {
+    final db = await database;
+    final results = await db.query(
+      'assigned_tasks',
+      orderBy: 'assigned_at_utc DESC',
+    );
+    return results.map((m) => AssignedTaskRecord.fromMap(m)).toList();
+  }
+
+  /// Delete an assigned task by scan_id
+  Future<void> deleteAssignedTask(String scanId) async {
+    final db = await database;
+    await db.delete(
+      'assigned_tasks',
+      where: 'scan_id = ?',
+      whereArgs: [scanId],
+    );
+  }
+
+  /// Clear all assigned tasks (for testing/logout)
+  Future<void> clearAssignedTasks() async {
+    final db = await database;
+    await db.delete('assigned_tasks');
   }
 }

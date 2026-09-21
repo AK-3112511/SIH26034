@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.routers import admin, auth, challans, dashboard, products, scans
+from app.routers import admin, auth, challans, dashboard, events, products, scans, users
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -42,6 +42,9 @@ app.include_router(challans.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(products.router, prefix=settings.API_V1_STR)
+app.include_router(events.router, prefix=settings.API_V1_STR)
+app.include_router(users.router, prefix=settings.API_V1_STR)
+
 
 @app.get("/")
 async def root():

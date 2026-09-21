@@ -162,6 +162,7 @@ export const scansApi = {
       formData,
       { headers: { "Content-Type": "multipart/form-data" } }
     ),
+  assignedToMe: () => api.get<AssignedScan[]>("/scans/assigned-to-me"),
 };
 
 // ─── Challans ─────────────────────────────────────────────────────────────────
@@ -336,3 +337,85 @@ export const adminAuditLogApi = {
   list: (params: { target_type?: string; action?: string; page?: number; page_size?: number }) =>
     api.get<AuditLogListResponse>("/admin/audit-log", { params }),
 };
+
+// ─── Real-Time Events Layer (§6.2) ──────────────────────────────────────────
+
+export interface RuleResultSummary {
+  rule_id: string;
+  status: "PASS" | "FAIL" | "UNVERIFIED";
+  reason: string | null;
+}
+
+export interface ScanStatusChangedPayload {
+  scan_id: string;
+  new_status: string;
+  rule_results: RuleResultSummary[];
+  assigned_lmo_id: string | null;
+}
+
+export interface TaskAssignedPayload {
+  scan_id: string;
+  assigned_to_lmo_id: string;
+  task_type: string;
+}
+
+export interface AppEvent {
+  id: string;
+  event_type: "scan.status_changed" | "task.assigned" | string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PollEventsResponse {
+  events: AppEvent[];
+  count: number;
+  server_time: string;
+}
+
+export const eventsApi = {
+  poll: (since?: string, limit: number = 50) =>
+    api.get<PollEventsResponse>("/events/poll", {
+      params: { ...(since ? { since } : {}), limit },
+    }),
+  assignTask: (payload: { scan_id: string; assigned_to_lmo_id: string; task_type?: string }) =>
+    api.post<{ scan_id: string; assigned_to_lmo_id: string; task_type: string; message: string }>(
+      "/events/task-assigned",
+      payload
+    ),
+};
+
+// ─── Users & Field Assignment (§5.3) ──────────────────────────────────────────
+
+export interface FieldOfficer {
+  id: string;
+  username: string;
+  email: string;
+  full_name: string;
+  role: string;
+  district: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AssignedScan {
+  scan_id: string;
+  source: "mobile" | "ecommerce";
+  status: "QUEUED" | "PASSED" | "FAILED" | "PENDING_REVIEW" | "CALIBRATION_FAILED";
+  image_url: string;
+  product_name: string | null;
+  platform: string | null;
+  task_type: string;
+  assigned_at_utc: string | null;
+  reviewer_note: string | null;
+  instructions: string | null;
+  rule_violations: string[];
+}
+
+export const usersApi = {
+  getFieldOfficers: (district?: string) =>
+    api.get<FieldOfficer[]>("/users/field-officers", {
+      params: district ? { district } : {},
+    }),
+};
+
+

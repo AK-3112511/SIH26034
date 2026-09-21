@@ -10,4 +10,7 @@ class ApiConstants {
   static String get loginEndpoint => '$baseUrl/auth/login';
   static String get meEndpoint => '$baseUrl/auth/me';
   static String get scansIngestEndpoint => '$baseUrl/scans/ingest';
+  static String get eventsPollEndpoint => '$baseUrl/events/poll';
+  static String get scansAssignedToMeEndpoint => '$baseUrl/scans/assigned-to-me';
 }
+

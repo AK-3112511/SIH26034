@@ -65,6 +65,7 @@ class AuthService extends ChangeNotifier {
   bool _isOffline = false;
 
   AuthToken? get currentToken => _currentToken;
+  String? get token => _currentToken?.accessToken;
   User? get currentUser => _currentUser;
   bool get isAuthenticated => _currentToken != null && _currentUser != null;
   bool get isOffline => _isOffline;

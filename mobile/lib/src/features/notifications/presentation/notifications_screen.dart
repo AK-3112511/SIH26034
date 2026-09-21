@@ -7,13 +7,20 @@ import '../models/notification_item.dart';
 /// Notifications Screen (Mobile UX §2, Screen 7)
 ///
 /// Pushed updates and field officer alerts for compliance verdicts,
+import '../services/notification_service.dart';
+
+/// Notifications Screen (Mobile UX §2, Screen 7)
+///
+/// Pushed updates and field officer alerts for compliance verdicts,
 /// queue sync completions, stuck photo warnings, and legal notices.
 class NotificationsScreen extends StatefulWidget {
   final List<NotificationItem>? initialNotifications;
+  final NotificationService? notificationService;
 
   const NotificationsScreen({
     super.key,
     this.initialNotifications,
+    this.notificationService,
   });
 
   @override
@@ -21,41 +28,67 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  late List<NotificationItem> _notifications;
+  late final NotificationService _notificationService;
+  List<NotificationItem>? _localNotifications;
   String _selectedFilter = 'All';
 
   @override
   void initState() {
     super.initState();
-    _notifications = widget.initialNotifications ?? NotificationItem.mockNotifications();
+    _notificationService = widget.notificationService ?? NotificationService();
+    if (widget.initialNotifications != null) {
+      _localNotifications = List<NotificationItem>.from(widget.initialNotifications!);
+    } else {
+      _notificationService.addListener(_onNotificationsChanged);
+    }
   }
 
+  @override
+  void dispose() {
+    if (widget.initialNotifications == null) {
+      _notificationService.removeListener(_onNotificationsChanged);
+    }
+    super.dispose();
+  }
+
+  void _onNotificationsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  List<NotificationItem> get _notifications =>
+      _localNotifications ?? _notificationService.notifications;
+
   List<NotificationItem> get _filteredNotifications {
-    if (_selectedFilter == 'All') return _notifications;
+    final list = _notifications;
+    if (_selectedFilter == 'All') return list;
     if (_selectedFilter == 'Compliance') {
-      return _notifications.where((n) => n.category == NotificationCategory.compliance).toList();
+      return list.where((n) => n.category == NotificationCategory.compliance).toList();
     }
     if (_selectedFilter == 'Sync & Queue') {
-      return _notifications
+      return list
           .where((n) =>
               n.category == NotificationCategory.syncEvent ||
               n.category == NotificationCategory.stuckAlert)
           .toList();
     }
     if (_selectedFilter == 'Notices') {
-      return _notifications
+      return list
           .where((n) => n.category == NotificationCategory.challanNotice)
           .toList();
     }
-    return _notifications;
+    return list;
   }
 
   void _markAllAsRead() {
-    setState(() {
-      for (final n in _notifications) {
-        n.isRead = true;
-      }
-    });
+    if (_localNotifications != null) {
+      setState(() {
+        for (final n in _localNotifications!) {
+          n.isRead = true;
+        }
+      });
+    } else {
+      _notificationService.markAllAsRead();
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -67,9 +100,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   void _handleNotificationTap(NotificationItem item) {
-    setState(() {
-      item.isRead = true;
-    });
+    if (_localNotifications != null) {
+      setState(() {
+        item.isRead = true;
+      });
+    } else {
+      _notificationService.markAsRead(item.id);
+    }
 
     if (item.deepLinkRoute == '/sync-queue') {
       Navigator.of(context).push(
@@ -79,6 +116,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       );
     }
   }
+
 
   String _formatTimestamp(DateTime dt) {
     final diff = DateTime.now().difference(dt);

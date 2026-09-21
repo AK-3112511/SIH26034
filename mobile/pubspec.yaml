@@ -45,6 +45,7 @@ dependencies:
   workmanager: ^0.9.2
   http_parser: ^4.1.2
   flutter_secure_storage: ^9.2.4
+  flutter_local_notifications: ^20.1.0
 
 dependency_overrides:
   workmanager_platform_interface: 0.9.3

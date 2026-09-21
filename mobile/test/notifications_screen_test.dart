@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/src/core/theme/app_theme.dart';
+import 'package:mobile/src/features/notifications/models/app_event.dart';
 import 'package:mobile/src/features/notifications/models/notification_item.dart';
 import 'package:mobile/src/features/notifications/presentation/notifications_screen.dart';
+import 'package:mobile/src/features/notifications/services/notification_service.dart';
 
 void main() {
   group('NotificationsScreen (§2 Screen 7)', () {
@@ -91,5 +93,50 @@ void main() {
 
       expect(find.text('No Notifications'), findsOneWidget);
     });
+
+    testWidgets('dynamically renders live compliance notification when scan.status_changed arrives (§5.2)', (tester) async {
+      final notifService = NotificationService.createTestInstance(
+        initialNotifications: [],
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.lightTheme,
+          home: NotificationsScreen(
+            notificationService: notifService,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('No Notifications'), findsOneWidget);
+
+      // Simulate incoming scan.status_changed event
+      final event = AppEvent(
+        id: 'evt-live-1',
+        eventType: 'scan.status_changed',
+        payload: {
+          'scan_id': '4c8e7456-9b1b-4f8a-a123-abcdef123456',
+          'new_status': 'FAILED',
+          'rule_results': [
+            {
+              'rule_id': '6(1)(e)',
+              'status': 'FAIL',
+              'reason': 'MRP Net Qty Font Violation',
+            }
+          ],
+          'assigned_lmo_id': 'field-lmo-01',
+        },
+        createdAt: DateTime.now(),
+      );
+
+      await notifService.handleEvent(event);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Compliance Verdict: Failed'), findsOneWidget);
+      expect(find.textContaining('4C8E7456 confirmed FAILED'), findsOneWidget);
+      expect(find.textContaining('Rule 6(1)(e)'), findsOneWidget);
+    });
   });
 }
+
