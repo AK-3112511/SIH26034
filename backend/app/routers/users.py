@@ -1,7 +1,6 @@
 """Users router for user lookup and field officer querying per §5.3."""
 from __future__ import annotations
 
-from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -16,7 +15,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("/field-officers", response_model=list[UserResponse], status_code=status.HTTP_200_OK)
 def list_field_officers(
-    district: Optional[str] = Query(None, description="Optional district filter"),
+    district: str | None = Query(None, description="Optional district filter"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_senior_lmo),
 ):

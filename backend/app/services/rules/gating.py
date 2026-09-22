@@ -6,7 +6,7 @@ from typing import Any
 
 from app.models.enums import RuleStatus, ScanStatus
 from app.services.rules.evaluators import RuleEvaluationResult
-from app.services.vision.semantic.base import ExtractedFieldResult
+from app.services.vision.semantic.base import MANDATED_SCHEMA_FIELDS, ExtractedFieldResult
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,13 @@ def rollup_scan_status(
     if any(r.status == RuleStatus.UNVERIFIED for r in rule_results):
         return ScanStatus.PENDING_REVIEW
 
-    # Check if any extracted field failed confidence gating
-    if fields is not None and any(gate_field(f) == FieldVerificationStatus.UNVERIFIED for f in fields.values()):
+    # Check if any *mandated* declaration failed confidence gating.  Indicative
+    # fields (product_name, declared_dimensions) never route a scan to review.
+    if fields is not None and any(
+        gate_field(f) == FieldVerificationStatus.UNVERIFIED
+        for name, f in fields.items()
+        if name in MANDATED_SCHEMA_FIELDS
+    ):
         return ScanStatus.PENDING_REVIEW
 
     # All mandatory fields verified and all rules pass

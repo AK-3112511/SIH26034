@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from geoalchemy2 import Geometry
 
+
 # SQLite in-memory type compilation overrides
 @compiles(JSONB, "sqlite")
 def compile_jsonb_sqlite(type_, compiler, **kw):
@@ -42,6 +43,7 @@ def compile_geometry_sqlite(type_, compiler, **kw):
     return "TEXT"
 
 import geoalchemy2.admin.dialects.sqlite
+
 geoalchemy2.admin.dialects.sqlite.after_create = lambda *args, **kwargs: None
 geoalchemy2.admin.dialects.sqlite.before_drop = lambda *args, **kwargs: None
 
@@ -131,7 +133,7 @@ def test_users_field_officers_list_and_district_filter():
     db = TestingSessionLocal()
     senior = _make_user(db, "senior_priya", UserRole.SENIOR_LMO, district="Madurai")
     field1 = _make_user(db, "lmo_ramesh", UserRole.FIELD_LMO, district="Madurai")
-    field2 = _make_user(db, "lmo_suresh", UserRole.FIELD_LMO, district="Coimbatore")
+    _make_user(db, "lmo_suresh", UserRole.FIELD_LMO, district="Coimbatore")
 
     # 1. Senior LMO queries all field officers
     res = client.get("/api/v1/users/field-officers", headers=_auth_header(senior))
@@ -167,6 +169,7 @@ def test_assign_ecommerce_task_and_fetch_assigned_to_me():
         evidence_hash="evidence_hash_123",
         status=ScanStatus.FAILED,
         reviewer_note="Net quantity declaration completely missing on product face.",
+        platform="blinkit",
         created_at=datetime.now(timezone.utc),
     )
     db.add(scan)

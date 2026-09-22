@@ -1,192 +1,159 @@
-"""Seed script to populate realistic PENDING_REVIEW scans and test fixtures per §4.2 layout sketch."""
+"""Seed demonstration scans by running the *real* pipeline.
+
+Run from /backend (after ``seed_users`` and ``seed_rulesets``)::
+
+    python -m app.db.seed_scans            # renders the demo catalogue and processes it
+    python -m app.db.seed_scans --reset    # deletes previously seeded demo scans first
+
+Each demo label is rendered as a photo (package face + ISO/IEC 7810 card),
+ingested exactly like a mobile capture (hash, storage, audit) attributed to a
+seeded field officer at a real district location, and then processed by the
+same OCR → calibration → rule-engine path production uses.  Nothing about the
+verdict is typed in by hand, so what the dashboard shows is what the system
+actually concluded.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import List
+from datetime import datetime, timedelta, timezone
+
+import cv2
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
+from app.models.audit_log import AuditLog
+from app.models.enums import ScanSource, ScanStatus, UserRole
 from app.models.scan import Scan
-from app.models.extracted_field import ExtractedField
-from app.models.rule_result import RuleResult
-from app.models.enums import ScanSource, ScanStatus, RuleStatus
 from app.models.user import User
+from app.services.audit import log_audit
+from app.services.district import normalise_district
+from app.services.hash_vault import compute_section_65b_hash
+from app.services.pipeline_orchestrator import process_scan
+from app.services.storage import get_storage_provider
+from app.services.vision.synthetic import DEMO_LABELS, render_label_with_card
 
-def seed_pending_review_scans(db: Session) -> List[Scan]:
-    """Seed canonical PENDING_REVIEW scans matching §4.2 sketch:
-    - Parle-G 100g (Chennai, TN) ~2h ago
-    - Amul Butter 500g (Coimbatore) ~5h ago
-    - Maggi Noodles 70g (Madurai) ~1d ago
-    - Britannia Good Day 200g (Salem) ~3h ago
-    """
-    now = datetime.now(timezone.utc)
-    scans_created = []
+SEED_DEVICE_ID = "demo-seed-device"
 
-    seed_definitions = [
-        {
-            "brand": "Parle-G 100g",
-            "net_qty": "100g",
-            "mrp": "Rs. 10.00",
-            "lat": 13.0827,
-            "lng": 80.2707,  # Chennai
-            "delta_hours": 2,
-            "image_url": "/static/uploads/parle_g_100g.jpg",
-            "evidence_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "ocr_confidences": [0.94, 0.70],  # gap = 0.24 (24%)
-        },
-        {
-            "brand": "Amul Butter 500g",
-            "net_qty": "500g",
-            "mrp": "Rs. 275.00",
-            "lat": 11.0168,
-            "lng": 76.9558,  # Coimbatore
-            "delta_hours": 5,
-            "image_url": "/static/uploads/amul_butter_500g.jpg",
-            "evidence_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-            "ocr_confidences": [0.98, 0.82],  # gap = 0.16 (16%)
-        },
-        {
-            "brand": "Maggi Noodles 70g",
-            "net_qty": "70g",
-            "mrp": "Rs. 14.00",
-            "lat": 9.9252,
-            "lng": 78.1198,  # Madurai
-            "delta_hours": 24,
-            "image_url": "/static/uploads/maggi_noodles_70g.jpg",
-            "evidence_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
-            "ocr_confidences": [0.92, 0.61],  # gap = 0.31 (31%)
-        },
-        {
-            "brand": "Britannia Good Day 200g",
-            "net_qty": "200g",
-            "mrp": "Rs. 45.00",
-            "lat": 11.6643,
-            "lng": 78.1460,  # Salem
-            "delta_hours": 3,
-            "image_url": "/static/uploads/good_day_200g.jpg",
-            "evidence_hash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
-            "ocr_confidences": [0.96, 0.88],  # gap = 0.08 (8%)
-        }
+# Retail locations across the officers' districts (lat, lng, place).
+_LOCATIONS = [
+    (13.0418, 80.2341, "T. Nagar market, Chennai"),
+    (11.0168, 76.9558, "RS Puram, Coimbatore"),
+    (9.9252, 78.1198, "Meenakshi Bazaar, Madurai"),
+    (11.6643, 78.1460, "Five Roads, Salem"),
+    (13.0827, 80.2707, "Parrys Corner, Chennai"),
+]
+
+
+def _pick_officer(db: Session, index: int, place: str) -> User:
+    """Prefer the officer posted to the district the capture happened in."""
+    officers = db.query(User).filter(User.role == UserRole.FIELD_LMO, User.is_active.is_(True)).order_by(User.username).all()
+    if not officers:
+        raise SystemExit("No active field officers found — run `python -m app.db.seed_users` first")
+    city = normalise_district(place.split(",")[-1])
+    for officer in officers:
+        if normalise_district(officer.district) == city:
+            return officer
+    return officers[index % len(officers)]
+
+
+def reset_demo_scans(db: Session) -> int:
+    ids = [
+        row[0]
+        for row in db.query(AuditLog.target_id)
+        .filter(AuditLog.action == "SCAN_INGESTED", AuditLog.detail["device_id"].as_string() == SEED_DEVICE_ID)
+        .all()
     ]
+    removed = 0
+    for sid in ids:
+        try:
+            scan = db.query(Scan).filter(Scan.scan_id == uuid.UUID(sid)).first()
+        except ValueError:
+            continue
+        if scan:
+            db.delete(scan)
+            removed += 1
+    db.commit()
+    return removed
 
-    for item in seed_definitions:
-        created_time = now - timedelta(hours=item["delta_hours"])
+
+def seed_demo_scans(db: Session, verbose: bool = True) -> list[Scan]:
+    storage = get_storage_provider()
+    created: list[Scan] = []
+    now = datetime.now(timezone.utc)
+
+    for index, (name, spec) in enumerate(DEMO_LABELS):
+        lat, lng, place = _LOCATIONS[index % len(_LOCATIONS)]
+        officer = _pick_officer(db, index, place)
+        image, _geometry = render_label_with_card(spec, seed=index)
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        if not ok:
+            raise RuntimeError(f"could not encode demo image {name}")
+        image_bytes = encoded.tobytes()
+        captured_at = now - timedelta(hours=index * 3 + 1)
+
+        evidence_hash = compute_section_65b_hash(
+            image_bytes=image_bytes, lat=lat, lng=lng, captured_at_utc=captured_at, device_id=SEED_DEVICE_ID
+        )
+        image_key = storage.upload_file(image_bytes, f"demo_{name}.jpg", content_type="image/jpeg")
         scan = Scan(
             scan_id=uuid.uuid4(),
-            source=ScanSource.MOBILE.value,
-            status=ScanStatus.PENDING_REVIEW.value,
-            image_url=item["image_url"],
-            evidence_hash=item["evidence_hash"],
-            lat=item["lat"],
-            lng=item["lng"],
-            captured_at_utc=created_time,
-            created_at=created_time,
-            mm_per_px=0.085,
-            pdp_area_cm2=120.5,
-            ruleset_version="2026.1"
+            source=ScanSource.MOBILE,
+            image_url=image_key,
+            evidence_hash=evidence_hash,
+            lat=lat,
+            lng=lng,
+            captured_at_utc=captured_at,
+            status=ScanStatus.QUEUED,
+            captured_by_id=officer.id,
+            reference_object_type="debit_card",
+            product_type="box",
+            product_name=f"{spec.brand.title()} {spec.product}",
         )
         db.add(scan)
-        db.flush()
+        db.commit()
+        db.refresh(scan)
+        log_audit(
+            db=db,
+            action="SCAN_INGESTED",
+            target_type="scan",
+            target_id=str(scan.scan_id),
+            actor_id=officer.id,
+            detail={
+                "status": ScanStatus.QUEUED.value,
+                "source": ScanSource.MOBILE.value,
+                "device_id": SEED_DEVICE_ID,
+                "reference_object_type": "debit_card",
+                "evidence_hash": evidence_hash,
+                "image_url": image_key,
+                "ip_address": "seed",
+                "place": place,
+            },
+        )
 
-        # Add extracted fields with realistic bounding box coordinates (normalized percentages [x1, y1, x2, y2])
-        # Preserves Section 65B chain-of-custody: coordinates rendered as client SVG overlay, NOT burned into raw image
-        ef_brand = ExtractedField(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            field_name="brand_name",
-            raw_text=item["brand"],
-            bbox={"x1": 18.5, "y1": 15.0, "x2": 65.0, "y2": 26.5},
-            ocr_confidence=item["ocr_confidences"][0],
-            semantic_confidence=0.95,
-            font_height_mm=4.5
-        )
-        ef_qty = ExtractedField(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            field_name="net_quantity",
-            raw_text=item["net_qty"],
-            bbox={"x1": 22.0, "y1": 55.0, "x2": 48.0, "y2": 63.0},
-            ocr_confidence=item["ocr_confidences"][1],
-            semantic_confidence=0.88,
-            font_height_mm=2.8
-        )
-        ef_mrp = ExtractedField(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            field_name="mrp",
-            raw_text=item["mrp"],
-            bbox={"x1": 52.0, "y1": 54.0, "x2": 82.0, "y2": 63.5},
-            ocr_confidence=0.91,
-            semantic_confidence=0.90,
-            font_height_mm=3.0
-        )
-        ef_mfg = ExtractedField(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            field_name="manufacturer_address",
-            raw_text="Parle Products Pvt. Ltd., V.S. Khandekar Marg, Vile Parle East, Mumbai 400057",
-            bbox={"x1": 15.0, "y1": 70.0, "x2": 85.0, "y2": 82.0},
-            ocr_confidence=0.93,
-            semantic_confidence=0.91,
-            font_height_mm=1.8
-        )
-        ef_care = ExtractedField(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            field_name="consumer_care",
-            raw_text="Email: cs@consumer.org | Toll Free: 1800-22-1929",
-            bbox={"x1": 15.0, "y1": 84.0, "x2": 78.0, "y2": 92.0},
-            ocr_confidence=0.89,
-            semantic_confidence=0.92,
-            font_height_mm=1.6
-        )
-        db.add_all([ef_brand, ef_qty, ef_mrp, ef_mfg, ef_care])
+        processed = process_scan(scan.scan_id, db=db)
+        created.append(processed or scan)
+        if verbose:
+            status = processed.status.value if processed else "?"
+            print(f"  - {name:24s} -> {status:14s} ({officer.username} @ {place})")
 
-        # Add rule results matching §4.3: 6(1)(a), 6(1)(c), 6(1)(e), 6(1)(g), schedule_ii
-        rr_a = RuleResult(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            rule_id="6.1.a",
-            status=RuleStatus.PASS,
-            reason="Manufacturer name & complete address verified with valid pin code",
-            evidence={"confidence": 0.95, "field": "manufacturer_address"}
-        )
-        rr_c = RuleResult(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            rule_id="6.1.c",
-            status=RuleStatus.PASS,
-            reason="Standard SI metric units (g/kg/ml) correctly stated",
-            evidence={"unit": "g", "declared_qty": item["net_qty"]}
-        )
-        rr_e = RuleResult(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            rule_id="6.1.e",
-            status=RuleStatus.FAIL if "Maggi" in item["brand"] else RuleStatus.PASS,
-            reason="Missing statutory phrase 'inclusive of all taxes'" if "Maggi" in item["brand"] else "Statutory phrase 'inclusive of all taxes' present and legible",
-            evidence={"raw_mrp": item["mrp"], "has_tax_phrase": ("Maggi" not in item["brand"])}
-        )
-        rr_g = RuleResult(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            rule_id="6.1.g",
-            status=RuleStatus.PASS,
-            reason="Consumer care telephone and email contact provided",
-            evidence={"contact_types": ["email", "phone"]}
-        )
-        rr_sched2 = RuleResult(
-            id=uuid.uuid4(),
-            scan_id=scan.scan_id,
-            rule_id="schedule_ii",
-            status=RuleStatus.UNVERIFIED,
-            reason="Confidence gap on net quantity numeral height requires senior LMO visual verification",
-            evidence={
-                "measured_height_mm": 2.8,
-                "required_height_mm": 3.0,
-                "confidence_gap": item["ocr_confidences"][0] - item["ocr_confidences"][1]
-            }
-        )
-        db.add_all([rr_a, rr_c, rr_e, rr_g, rr_sched2])
-        scans_created.append(scan)
+    return created
 
-    db.commit()
-    return scans_created
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--reset", action="store_true", help="delete previously seeded demo scans first")
+    args = parser.parse_args()
+
+    session = SessionLocal()
+    try:
+        if args.reset:
+            print(f"Removed {reset_demo_scans(session)} previously seeded demo scan(s)")
+        print("Rendering demo labels and running the real pipeline (first run loads OCR models)...")
+        seed_demo_scans(session)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        raise
+    finally:
+        session.close()

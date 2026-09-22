@@ -236,7 +236,7 @@ class TestMasterExtractionPipeline:
         assert result.ocr_engine_name == "DeterministicOCREngine"
         assert result.semantic_engine_name == "RuleBasedSemanticMapper"
         assert len(result.ocr_lines) >= 8
-        assert len(result.fields) == 8
+        assert len(result.fields) >= 8  # 8 mandated declarations + indicative product_name
 
         # All 8 mandated fields present
         for field in MANDATED_SCHEMA_FIELDS:
@@ -277,7 +277,7 @@ class TestMasterExtractionPipeline:
         extractor = get_extraction_pipeline(ocr_engine="deterministic", semantic_engine="rules")
         extraction_result = extractor.process(preproc_result.dewarped_package_image)
 
-        assert len(extraction_result.fields) == 8
+        assert len(extraction_result.fields) >= 8
         assert "pincode" in extraction_result.fields
         assert extraction_result.fields["unit"].raw_text == "g"
 

@@ -42,6 +42,21 @@ class PreprocessingResult:
     is_cylindrical: bool = False
     curvature_score: float = 0.0
     clahe_applied: bool = False
+    # Manual (declared-dimension) calibration for e-commerce listings.
+    manual_mm_per_px: float | None = None
+    manual_pdp_area_cm2: float | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status.value,
+            "is_calibration_successful": self.is_calibration_successful,
+            "failure_reason": self.failure_reason,
+            "card_confidence": self.reference_card_bbox.confidence if self.reference_card_bbox else None,
+            "mm_per_px": self.mm_per_px,
+            "ratio_discrepancy_pct": self.ratio_discrepancy_pct,
+            "is_cylindrical": self.is_cylindrical,
+            "manual_mm_per_px": self.manual_mm_per_px,
+        }
 
 
 class PreprocessingPipeline:
@@ -71,13 +86,21 @@ class PreprocessingPipeline:
         self,
         image: np.ndarray,
         reference_object_type: str | None = None,
+        product_type: str | None = None,
+        manual_mm_per_px: float | None = None,
+        manual_pdp_area_cm2: float | None = None,
     ) -> PreprocessingResult:
         """
         Execute the complete preprocessing pipeline on a raw image.
 
         Args:
             image: Source image (BGR np.ndarray).
-            reference_object_type: Optional container type hint ('box', 'bottle', 'manual').
+            reference_object_type: Reference object placed in frame ('debit_card', 'pan_card',
+                'manual' for declared dimensions).  Any ISO/IEC 7810 ID-1 card shares the
+                same geometry, so the value is recorded but does not change detection.
+            product_type: Container hint for the curvature heuristic ('box' | 'bottle').
+            manual_mm_per_px / manual_pdp_area_cm2: Declared-dimension calibration for
+                e-commerce screenshots; when given, card detection is skipped entirely.
 
         Returns:
             PreprocessingResult with status, dewarped image, and spatial calibration data.
@@ -88,6 +111,29 @@ class PreprocessingPipeline:
                 is_calibration_successful=False,
                 failure_reason="Invalid or empty image supplied",
             )
+
+        if manual_mm_per_px is not None and manual_mm_per_px > 0:
+            h, w = image.shape[:2]
+            whole = BoundingBox(x_min=0, y_min=0, x_max=w, y_max=h, confidence=1.0, label="package_face")
+            enhanced = apply_clahe_contrast(image, clip_limit=2.0, tile_grid_size=(8, 8))
+            return PreprocessingResult(
+                status=ScanStatus.QUEUED,
+                is_calibration_successful=True,
+                detection_result=DetectionResult(package_face=whole, engine="manual"),
+                package_face_bbox=whole,
+                reference_card_bbox=None,
+                dewarped_package_image=enhanced,
+                mm_per_px=manual_mm_per_px,
+                ratio_discrepancy_pct=0.0,
+                is_ratio_consistent=True,
+                clahe_applied=True,
+                manual_mm_per_px=manual_mm_per_px,
+                manual_pdp_area_cm2=manual_pdp_area_cm2,
+            )
+
+        # Backwards compatibility: older mobile builds sent the container type here.
+        if product_type is None and reference_object_type in ("box", "bottle"):
+            product_type = reference_object_type
 
         # -------------------------------------------------------------
         # Step 1: Detection pass and calibration gating (§4.3 Step 1)
@@ -163,10 +209,13 @@ class PreprocessingPipeline:
         else:
             package_crop = image.copy()
 
-        # 2c. Curvature heuristic and cylindrical dewarp
-        is_cylindrical, curvature_score = analyze_curvature(
-            package_crop, reference_object_type=reference_object_type
-        )
+        # 2c. Cylindrical dewarp.  The image-based curvature score is recorded
+        #     for diagnostics only: on text-heavy labels it fits parabolas to
+        #     lines of print and misfires, and a wrong dewarp corrupts every
+        #     measurement downstream.  Unrolling happens only when the officer
+        #     declared a cylindrical container.
+        _, curvature_score = analyze_curvature(package_crop, reference_object_type=None)
+        is_cylindrical = (product_type or "").lower().strip() in ("bottle", "can", "cylinder", "cylindrical")
 
         if is_cylindrical:
             dewarped_package = cylindrical_dewarp(package_crop)

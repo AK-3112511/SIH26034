@@ -44,6 +44,7 @@ from app.services.rules.evaluators import (
 )
 from app.services.rules.ruleset_config import (
     PLACEHOLDER_SCHEDULE_II_V1,
+    STATUTORY_SCHEDULE_II_2011,
     ScheduleIIBand,
     ScheduleIIRuleset,
     register_ruleset,
@@ -325,12 +326,16 @@ class TestScheduleIIConfigDriven:
         assert "Font height 1.20mm is smaller than mandated minimum 2.00mm" in res.reason
 
     def test_schedule_ii_open_upper_bracket(self, compliant_fields):
-        # PDP area: 800 cm² (> 500 cm², required min 6.0mm)
-        res_pass = check_schedule_ii(compliant_fields, font_height_mm=6.5, pdp_area_cm2=800.0)
+        # Statutory Schedule II: PDP area > 2500 cm² requires numerals >= 6.0 mm
+        res_pass = check_schedule_ii(compliant_fields, font_height_mm=6.5, pdp_area_cm2=3000.0)
         assert res_pass.status == RuleStatus.PASS
 
-        res_fail = check_schedule_ii(compliant_fields, font_height_mm=4.5, pdp_area_cm2=800.0)
+        res_fail = check_schedule_ii(compliant_fields, font_height_mm=4.5, pdp_area_cm2=3000.0)
         assert res_fail.status == RuleStatus.FAIL
+
+        # 500-2500 cm² band requires >= 4.0 mm
+        assert check_schedule_ii(compliant_fields, font_height_mm=4.0, pdp_area_cm2=800.0).status == RuleStatus.PASS
+        assert check_schedule_ii(compliant_fields, font_height_mm=3.9, pdp_area_cm2=800.0).status == RuleStatus.FAIL
 
     def test_schedule_ii_missing_measurements_unverified(self, compliant_fields):
         res = check_schedule_ii(compliant_fields, font_height_mm=None, pdp_area_cm2=None)
@@ -463,7 +468,7 @@ def test_discrete_persistence_to_database(compliant_fields):
 
     assert len(persisted) == 5
     assert scan.status == ScanStatus.PASSED
-    assert scan.ruleset_version == PLACEHOLDER_SCHEDULE_II_V1.version
+    assert scan.ruleset_version == STATUTORY_SCHEDULE_II_2011.version
 
     # Query directly from DB
     db_rows = session.query(RuleResult).filter(RuleResult.scan_id == scan_id).all()

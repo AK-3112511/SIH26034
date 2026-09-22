@@ -203,10 +203,11 @@ def test_activation_takes_effect_on_get_active_ruleset_when_db_passed():
 
 def test_get_active_ruleset_falls_back_to_in_memory_placeholder_without_db():
     # No db session, no version created — must never crash, must return the
-    # in-memory placeholder (pre-Phase-6.3 behavior, still exercised by
-    # every existing rule-engine test that doesn't pass a db).
+    # in-memory statutory table (every rule-engine test that doesn't pass a db
+    # exercises this path).
     active = get_active_ruleset()
-    assert active.is_placeholder is True
+    assert active.is_placeholder is False
+    assert active.version == "pcr_2011_schedule_ii"
 
 
 def test_requires_admin_role():

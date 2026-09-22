@@ -1,0 +1,18 @@
+# MetrologyAI backend — real OCR engine (CPU). Optional but required for
+# OCR_ENGINE=paddle (the production default). Without these the API refuses
+# to process scans unless OCR_ENGINE=mock is set explicitly.
+#
+#   pip install -r requirements-ai.txt
+#
+# PaddleOCR downloads PP-OCRv4 detection/recognition models (~20 MB) on first use.
+paddlepaddle>=2.6,<3.0
+paddleocr>=2.7,<2.9
+
+# Optional VLM semantic mapper (SEMANTIC_ENGINE=florence2). Heavy; not needed for CPU demo.
+# torch>=2.2
+# transformers>=4.40
+# einops>=0.7
+# timm>=0.9
+
+# Optional S3-compatible object storage (STORAGE_BACKEND=s3)
+# boto3>=1.34

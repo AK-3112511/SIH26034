@@ -15,7 +15,7 @@ def test_tables_registered():
     table_names = set(Base.metadata.tables.keys())
     expected = {
         "scans", "extracted_fields", "rule_results", "challans", "users", "audit_log",
-        "ruleset_versions",
+        "ruleset_versions", "event_logs",
     }
     assert table_names == expected, f"Expected tables {expected}, but found {table_names}"
 
@@ -43,7 +43,8 @@ def test_scans_table_structure():
         "scan_id", "source", "image_url", "evidence_hash",
         "lat", "lng", "location", "captured_at_utc",
         "mm_per_px", "pdp_area_cm2", "status", "ruleset_version", "created_at",
-        "assigned_lmo_id", "reviewer_note"
+        "assigned_lmo_id", "reviewer_note", "captured_by_id", "product_name", "platform",
+        "reference_object_type", "processing_error", "product_type",
     }
     assert expected_cols == col_names
 
@@ -67,10 +68,9 @@ def test_extracted_fields_table_structure():
     assert expected_cols == col_names
     assert isinstance(table.columns["bbox"].type, JSONB)
 
-    # FK check
-    fk = next(iter(table.foreign_keys))
-    assert fk.column.table.name == "scans"
-    assert fk.column.name == "scan_id"
+    # FK check: every extracted field belongs to a scan
+    fk_targets = {(fk.parent.name, fk.column.table.name, fk.column.name) for fk in table.foreign_keys}
+    assert fk_targets == {("scan_id", "scans", "scan_id")}
 
 def test_rule_results_table_structure():
     table = Base.metadata.tables["rule_results"]
@@ -92,10 +92,13 @@ def test_challans_table_structure():
     expected_cols = {"challan_id", "scan_id", "lmo_id", "pdf_url", "pdf_hash", "generated_at"}
     assert expected_cols == col_names
     
-    # FK check
-    fk = next(iter(table.foreign_keys))
-    assert fk.column.table.name == "scans"
-    assert fk.column.name == "scan_id"
+    # FK checks: evidence link to scans and issuing officer link to users
+    fk_targets = {(fk.parent.name, fk.column.table.name, fk.column.name) for fk in table.foreign_keys}
+    assert ("scan_id", "scans", "scan_id") in fk_targets
+    assert ("lmo_id", "users", "id") in fk_targets
+    # One Section 39 notice per scan
+    unique_cols = {tuple(c.name for c in uc.columns) for uc in table.constraints if uc.__class__.__name__ == "UniqueConstraint"}
+    assert ("scan_id",) in unique_cols
 
 if __name__ == "__main__":
     test_tables_registered()

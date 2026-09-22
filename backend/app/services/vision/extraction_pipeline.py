@@ -73,9 +73,14 @@ class ExtractionPipeline:
         self.ocr_engine = ocr_engine
         self.semantic_mapper = semantic_mapper
 
-    def process(self, package_face: np.ndarray) -> ExtractionResult:
+    def process(self, package_face: np.ndarray, origin: tuple[int, int] = (0, 0)) -> ExtractionResult:
         """
         Executes Layer 1 OCR and Layer 2 Semantic Mapping on package_face image.
+
+        ``origin`` is the (x, y) offset of ``package_face`` inside the original
+        evidence image.  All returned boxes are translated by it so that they can
+        be drawn on the untouched original (chain of custody: the overlay is
+        rendered client-side, never burned into pixels).
         """
         if package_face is None or package_face.size == 0:
             raise ValueError("package_face image cannot be empty or None")
@@ -86,6 +91,17 @@ class ExtractionPipeline:
         start_ocr = time.perf_counter()
         ocr_lines = self.ocr_engine.extract_text(package_face)
         ocr_time_ms = (time.perf_counter() - start_ocr) * 1000.0
+        ox, oy = int(origin[0]), int(origin[1])
+        if ox or oy:
+            for line in ocr_lines:
+                line.bbox = {
+                    "x_min": line.bbox["x_min"] + ox,
+                    "y_min": line.bbox["y_min"] + oy,
+                    "x_max": line.bbox["x_max"] + ox,
+                    "y_max": line.bbox["y_max"] + oy,
+                }
+                if line.polygon:
+                    line.polygon = [[int(p[0]) + ox, int(p[1]) + oy] for p in line.polygon]
 
         # --- Layer 2: Semantic Mapping ---
         start_sem = time.perf_counter()
@@ -117,46 +133,44 @@ def get_extraction_pipeline(
     semantic_engine: str = "auto",
     device: str | None = None,
 ) -> ExtractionPipeline:
-    """
-    Factory function for ExtractionPipeline adhering to production/fallback decision trees.
+    """Factory for the OCR + semantic-mapping pipeline.
 
-    OCR Selection:
-    - 'paddle': NativePaddleOCREngine
-    - 'deterministic': DeterministicOCREngine
-    - 'auto': NativePaddleOCREngine if paddleocr installed, else DeterministicOCREngine
+    Engine choice is explicit and comes from configuration (``OCR_ENGINE`` /
+    ``SEMANTIC_ENGINE``) when the caller passes ``"auto"``.  The mock OCR engine
+    returns a fixed synthetic label and is never chosen implicitly outside the
+    test suite — if PaddleOCR is requested but not installed we fail loudly
+    instead of silently producing fake extractions.
 
-    Semantic Selection:
-    - 'florence': Florence2SemanticMapper
-    - 'rules': RuleBasedSemanticMapper
-    - 'auto': Florence2SemanticMapper (with dynamic fallback to RuleBasedSemanticMapper)
+    OCR:      'paddle' (real, CPU/GPU) | 'mock' (alias: 'deterministic')
+    Semantic: 'rules' (regex/lexical) | 'florence2' (VLM, falls back to rules if unavailable)
     """
-    # 1. Resolve OCR Engine
+    from app.core.config import settings
+
+    ocr_choice = settings.OCR_ENGINE if ocr_engine == "auto" else ocr_engine
+    semantic_choice = settings.SEMANTIC_ENGINE if semantic_engine == "auto" else semantic_engine
+
     selected_ocr: BaseOCREngine
-    if ocr_engine == "paddle":
-        selected_ocr = NativePaddleOCREngine()
-    elif ocr_engine == "deterministic":
-        selected_ocr = DeterministicOCREngine()
-    elif ocr_engine == "auto":
+    if ocr_choice == "paddle":
         try:
             import paddleocr  # noqa: F401
-            selected_ocr = NativePaddleOCREngine()
-            logger.info("Auto-selected OCR engine: NativePaddleOCREngine")
-        except ImportError:
-            selected_ocr = DeterministicOCREngine()
-            logger.info("Auto-selected OCR engine: DeterministicOCREngine (paddleocr not installed)")
+        except ImportError as exc:
+            raise RuntimeError(
+                "OCR_ENGINE=paddle but PaddleOCR is not installed. "
+                "Run `pip install -r requirements-ai.txt` or set OCR_ENGINE=mock for UI development."
+            ) from exc
+        selected_ocr = NativePaddleOCREngine()
+    elif ocr_choice in ("mock", "deterministic"):
+        selected_ocr = DeterministicOCREngine()
     else:
-        raise ValueError(f"Unknown ocr_engine '{ocr_engine}'. Must be 'paddle', 'deterministic', or 'auto'.")
+        raise ValueError(f"Unknown ocr_engine '{ocr_choice}'. Must be 'paddle' or 'mock'.")
 
-    # 2. Resolve Semantic Mapper
     selected_mapper: BaseSemanticMapper
-    if semantic_engine == "florence":
+    if semantic_choice in ("florence2", "florence"):
         selected_mapper = Florence2SemanticMapper(device=device)
-    elif semantic_engine == "rules":
+    elif semantic_choice == "rules":
         selected_mapper = RuleBasedSemanticMapper()
-    elif semantic_engine == "auto":
-        # Florence2SemanticMapper automatically falls back to RuleBased if torch/transformers/weights unavailable
-        selected_mapper = Florence2SemanticMapper(device=device)
     else:
-        raise ValueError(f"Unknown semantic_engine '{semantic_engine}'. Must be 'florence', 'rules', or 'auto'.")
+        raise ValueError(f"Unknown semantic_engine '{semantic_choice}'. Must be 'rules' or 'florence2'.")
 
+    logger.info("Extraction engines: ocr=%s semantic=%s", type(selected_ocr).__name__, type(selected_mapper).__name__)
     return ExtractionPipeline(ocr_engine=selected_ocr, semantic_mapper=selected_mapper)

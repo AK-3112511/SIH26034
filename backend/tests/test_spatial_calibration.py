@@ -168,7 +168,7 @@ class TestSpatialCalibrationServiceEndToEnd:
         extractor = get_extraction_pipeline(ocr_engine="deterministic", semantic_engine="rules")
         extraction_result = extractor.process(preproc_result.dewarped_package_image)
 
-        assert len(extraction_result.fields) == 8
+        assert len(extraction_result.fields) >= 8
 
         # 4. Phase 3.3 Spatial Calibration & Measurement Service
         service = SpatialCalibrationService()

@@ -109,12 +109,54 @@ PLACEHOLDER_SCHEDULE_II_V1 = ScheduleIIRuleset(
     ],
 )
 
-# Registry of all known versioned rulesets
+# Statutory table — Legal Metrology (Packaged Commodities) Rules, 2011, Rule 7(3)
+# read with Schedule II: minimum height of numerals in the net-quantity
+# declaration, stepped by the area of the principal display panel.  The
+# doubled heights that apply when numerals are blown, formed, moulded,
+# embossed or perforated on the container are listed in each band's
+# description; the engine measures printed labels, so the printed minimum is
+# the enforced figure.
+STATUTORY_SCHEDULE_II_2011 = ScheduleIIRuleset(
+    version="pcr_2011_schedule_ii",
+    effective_date="2011-04-01",
+    is_placeholder=False,
+    notice=(
+        "Legal Metrology (Packaged Commodities) Rules, 2011 — Rule 7(3) and Schedule II: "
+        "minimum height of numerals in the net quantity declaration by principal display panel area. "
+        "Blown/formed/moulded/embossed/perforated numerals require double the listed height."
+    ),
+    bands=[
+        ScheduleIIBand(
+            max_area_cm2=100.0,
+            min_font_mm=1.0,
+            description="PDP area up to 100 cm²: numerals ≥ 1 mm (2 mm if blown/embossed)",
+        ),
+        ScheduleIIBand(
+            max_area_cm2=500.0,
+            min_font_mm=2.0,
+            description="PDP area above 100 cm² up to 500 cm²: numerals ≥ 2 mm (4 mm if blown/embossed)",
+        ),
+        ScheduleIIBand(
+            max_area_cm2=2500.0,
+            min_font_mm=4.0,
+            description="PDP area above 500 cm² up to 2500 cm²: numerals ≥ 4 mm (6 mm if blown/embossed)",
+        ),
+        ScheduleIIBand(
+            max_area_cm2=None,
+            min_font_mm=6.0,
+            description="PDP area above 2500 cm²: numerals ≥ 6 mm (8 mm if blown/embossed)",
+        ),
+    ],
+)
+
+# Registry of all known versioned rulesets (in-memory fallback when no database
+# session is available; the admin-managed ``ruleset_versions`` table wins).
 RULESET_REGISTRY: dict[str, ScheduleIIRuleset] = {
     PLACEHOLDER_SCHEDULE_II_V1.version: PLACEHOLDER_SCHEDULE_II_V1,
+    STATUTORY_SCHEDULE_II_2011.version: STATUTORY_SCHEDULE_II_2011,
 }
 
-ACTIVE_RULESET_VERSION = PLACEHOLDER_SCHEDULE_II_V1.version
+ACTIVE_RULESET_VERSION = STATUTORY_SCHEDULE_II_2011.version
 
 
 def _load_from_db(db: Session, version: str | None) -> ScheduleIIRuleset | None:

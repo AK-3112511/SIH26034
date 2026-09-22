@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.common import SignedFileUrl
+
 
 class ProductScanEntry(BaseModel):
     scan_id: uuid.UUID
@@ -14,7 +16,7 @@ class ProductScanEntry(BaseModel):
     district_label: str | None
     captured_at_utc: datetime | None
     created_at: datetime
-    image_url: str
+    image_url: SignedFileUrl
 
 
 class ProductSearchResult(BaseModel):

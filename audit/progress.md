@@ -1157,3 +1157,73 @@ All five subtasks (6.1 PostGIS Heatmap, 6.2 Digital Repository/Product Search, 6
 
 ### Next Steps
 - Phase 6 complete. Ready for **Phase 7 (Real-Time Integration Layer)** per the phased implementation plan.
+
+---
+
+## Log Entry #026 — Phase A: Backend Foundation (Run-for-Real)
+**Date:** 2026-09-22
+**Author:** Claude (lead engineer, post-Phase-7 product hardening)
+**Status:** ✅ Phase A complete — backend runs end-to-end on a real local PostgreSQL 16 + PostGIS 3.6 database with real PaddleOCR installed. 193/193 tests, `ruff` clean.
+
+### Why this phase existed
+A full-repository audit (see the plan at the start of this engagement) found that Phases 0–7 had never run together on a real deployment: the ORM bound enum *names* that the Postgres enum types rejected, Phase 7's `event_logs` table had no migration, the venv was missing `reportlab`/`Pillow`, `requirements.txt` was UTF-16, PaddleOCR was never installed so every scan produced canned "Britannia" text, ingestion was unauthenticated, and evidence was served from a public static mount.
+
+### Environment (this laptop, per product-owner decision)
+- Installed **PostgreSQL 16.15** via winget and the **PostGIS 3.6.2 bundle** (copied into the PG install); database `metrologyai` created with `CREATE EXTENSION postgis`.
+- Installed **PaddlePaddle 2.6 + PaddleOCR (CPU)** into `backend/.venv` via new `requirements-ai.txt`. Verified it reads text from a rendered label.
+- New `scripts/bootstrap.ps1` / `scripts/bootstrap.sh`: create DB + extension, venv, deps, `.env` (random JWT secret), migrations, seed users + rulesets in one command.
+
+### Changes
+- **Dependencies:** `requirements.txt` rewritten (UTF-8, core only), `requirements-ai.txt` (Paddle; optional torch/boto3 commented), `pyproject.toml` aligned with `[project.optional-dependencies]`.
+- **Settings (`app/core/config.py`):** `ENV`, `CORS_ORIGINS`, `FILE_URL_TTL_SECONDS`, `MAX_UPLOAD_BYTES`, `OCR_ENGINE` / `SEMANTIC_ENGINE` / `DETECTOR_ENGINE`, `PIPELINE_MAX_CONCURRENCY`; `DATABASE_URL` env var now honoured (alias); the built-in dev JWT secret is refused when `ENV=production`. `.env.example` rewritten to match; `.env` gitignored.
+- **Schema (`alembic/versions/0005_events_capture_identity.py`):** creates `event_logs`; adds `scans.captured_by_id` (FK users), `product_name`, `platform`, `reference_object_type`, `processing_error`; FK `challans.lmo_id → users`; `UNIQUE(challans.scan_id)`; enum values `PROCESSING`, `PROCESSING_FAILED`. Verified `alembic downgrade base && alembic upgrade head` twice on the real database.
+- **ORM enum binding fixed:** `values_callable=enum_values` on `scans.source/status` and `rule_results.status` (the Log Entry #021 production blocker).
+- **Authentication & scoping:** `POST /scans/ingest` requires a bearer token and stamps `captured_by_id`; `/scans/{id}/process` and `/scans/process-queued` are senior/admin only; `GET /scans/{id}` and `/verify-hash` are scoped for field officers to their own/assigned scans; challan list scoped likewise. `POST /events/task-assigned` now requires an *active field_lmo* assignee and accepts `instructions` (stored, audited, in the event payload, surfaced in `/scans/assigned-to-me`). `scan.status_changed` targets the *capturing* officer.
+- **Upload validation (`app/services/uploads.py`):** JPEG/PNG/WebP sniffed from bytes, size limit (413), filenames sanitised.
+- **Evidence access (`app/services/files.py`, `app/routers/files.py`):** the public `/static/uploads` mount is gone. Storage persists bare keys; every API response renders `image_url`/`pdf_url` as a signed, time-limited `/api/v1/files/{key}?exp=&sig=` URL (works in `<img>` tags); the endpoint also accepts a bearer token. Legacy `/static/uploads/...` values are normalised.
+- **Hash correctness:** e-commerce ingest hashed one timestamp and stored another (verification always failed); mobile ingest hashed `None` when the client omitted `captured_at_utc`. Both fixed; regression tests added.
+- **Engine selection is explicit:** `get_extraction_pipeline("auto")` reads `settings.OCR_ENGINE`; `paddle` fails loudly if not installed; `mock` (formerly "deterministic") is only for tests/UI dev. Detector reads `settings.DETECTOR_ENGINE`.
+- **Statutory Schedule II:** `STATUTORY_SCHEDULE_II_2011` (Rule 7(3)/Schedule II: ≤100 cm² → 1 mm, ≤500 → 2 mm, ≤2500 → 4 mm, >2500 → 6 mm; doubled for blown/embossed) is the active in-code default; `app/db/seed_rulesets.py` seeds it as the active DB version and keeps the old placeholder as inactive history.
+- **Challans:** bounded pagination, one notice per scan (second call returns the existing record with 200), `lmo_id` = capturing officer.
+- **Tests:** single `tests/conftest.py` (SQLite shims, `app_client`, `make_user`, `auth_headers`, `tiny_jpeg`, optional `postgres` marker); new `tests/test_evidence_access.py` (13 tests). Existing tests updated for the new auth/URL/ruleset contracts. Module-level shim copies remain in older files and are harmless (dedupe deferred to Phase E cleanup).
+
+### Live verification against real PostgreSQL
+Seeded users + rulesets → `uvicorn` → login as `lmo_ramesh` → `POST /scans/ingest` (201) → unauthenticated ingest (401) → background pipeline ran with the real PaddleOCR engine → scan listed as senior with product name/district → signed image URL 200 (`image/jpeg`), bare key 401, `/static/uploads/*` 404 → hash verification `is_valid: true` after the timestamp fix.
+
+### Known / deferred to later phases
+- **Mobile uploads will fail until Phase C** adds the bearer token to `sync_worker.dart` (ingest is now authenticated). This is intentional; Phase C is the very next step.
+- Pipeline output on real photos is still weak (`mm_per_px` null, no fields on low-text images, Hindi model fires on Latin text) — Phase B (real vision pipeline) addresses OCR configuration, card detection thresholds, `PROCESSING`/`PROCESSING_FAILED` state handling, and honest seed data.
+- Web `next.config.mjs` still rewrites `/static/uploads` (harmless; removed in Phase D). Signed URLs already pass through the existing `/api/v1/*` rewrite.
+
+---
+
+## Log Entry #027 — Phase B: Real Vision Pipeline (CPU)
+**Date:** 2026-09-22
+**Author:** Claude (lead engineer)
+**Status:** ✅ Phase B complete — real photos are read by PaddleOCR, calibrated against the card, measured at numeral level, and judged by the statutory rules. 203/203 tests (+1 opt-in real-OCR test), `ruff` clean, verified live on PostgreSQL.
+
+### What was wrong
+Every scan produced the same canned "Britannia" text; the OCR engine was rebuilt per scan with the Hindi-only model; OCR boxes were in crop coordinates (dashboard overlays could never align); "font height" was the OCR line box (over-reads by 20–70%); the curvature heuristic fitted parabolas to lines of print and dewarped flat boxes; e-commerce scans were pushed through card detection and always failed calibration; a pipeline crash left scans in `QUEUED` forever; the challan renderer crashed on real bboxes; demo data was typed into the DB by hand.
+
+### Changes
+- **OCR (`vision/ocr/paddle_ocr.py`):** PP-OCRv4 `en` pass + `devanagari` pass merged by overlap (the more confident script wins; Hindi lines must be majority-Devanagari). Models are process-cached, inference is lock-serialised, inputs capped at 1600 px with boxes scaled back. Devanagari recognition in PaddleOCR's multilingual model is weak — documented as best-effort; mandatory declarations are adjudicated from the English text.
+- **Engine policy:** `OCR_ENGINE` / `SEMANTIC_ENGINE` / `DETECTOR_ENGINE` settings are authoritative; one shared extraction pipeline per process; models warm up on a background thread at startup (`lifespan`), which also re-queues scans orphaned in `PROCESSING`.
+- **Geometry:** OCR boxes are translated to original-image pixels (`ExtractionPipeline.process(origin=)`) so the dashboard overlay and the challan annotate the untouched evidence. Numeral height is measured per glyph (`measure_glyph_height_px`: Otsu → connected components → 70th-percentile height = cap height) — within 4% of ground truth on every rendered label, vs the previous line-box method. Cylindrical dewarp now runs only on an explicit `product_type=bottle`; the image heuristic is diagnostic only.
+- **Manual calibration path:** `reference_object_type=manual` + declared dimensions skip card detection (`PreprocessingResult.manual_mm_per_px`); e-commerce listings now get real OCR, real rule verdicts, and auto-process on ingest.
+- **Card detector:** three edge maps (fixed, median-adaptive, CLAHE), three polygon tolerances, rectangularity-weighted confidence, IoU dedupe. Stress set (rotation ≤8°, perspective, noise, blur, ±exposure, 0.45× scale) all calibrate within 3%; a 20° in-frame rotation and an extreme skew are correctly refused.
+- **Semantic mapper:** `product_name` (tallest mostly-alphabetic unclaimed line; semantic 0.75, never gates a verdict); anchored "Mfd by / Packed by" lines beat brand lines containing corporate words. Gating now considers mandated fields only.
+- **State machine (`pipeline_orchestrator.py`):** `QUEUED → PROCESSING → verdict | PROCESSING_FAILED(reason)`; bounded by `PIPELINE_MAX_CONCURRENCY`; stale fields from a previous run are removed; `mm_per_px`, `processing_error`, extracted `product_name` persisted; audit detail records engines, card confidence and scale.
+- **Challan (`services/challan_pdf.py`):** rewritten notice — government header, seal badge and calibration rule in design tokens, particulars with officer *names*, contraventions with rule titles, declarations table with measured heights, original + vector-annotated copy (failed fields in red), Section 65B block, signature line. Accepts any stored bbox shape; e-commerce notices state "online listing" instead of demanding GPS; missing image → 422.
+- **Queue API:** status/source/search/age in SQL with SQL pagination on the common path; officers pre-loaded per page (no N+1); district filter by normalised key; `GET /scans/districts` for the dropdown; `product_name`/`net_quantity` fields on list items.
+- **Districts (`services/district.py`):** capturing officer → assignee → 13-city geocoder → coordinates; `normalise_district()` shared key.
+- **Review guard:** blocked while `QUEUED/PROCESSING`; reviewed verdicts can only be re-adjudicated by an admin; `LOW_CONFIDENCE_CALIBRATION` and `PROCESSING_FAILED` are reviewable.
+- **Demo data (`vision/synthetic.py`, `db/seed_scans.py`):** five rendered labels (compliant, missing tax phrase, "gms", undersized numerals on a 572 cm² panel, no consumer care) beside a true-size ID-1 card are ingested as captures by district-posted officers and processed by the real pipeline. Seed users now include four field officers (Coimbatore, Chennai, Madurai, Salem). Old hand-typed rows moved to `tests/fixtures.py`.
+
+### Verification
+- `pytest`: 203 passed, 1 skipped; `RUN_PADDLE_TESTS=1` runs the real-OCR end-to-end test (passes, 21 s after model load). `ruff` clean. Migrations at `0006_product_type`.
+- Live on PostgreSQL: seeded scans → `PENDING_REVIEW ×2, FAILED ×3` (the compliant label lands in review because JPEG compression put two OCR confidences at 0.93–0.95, exactly the §6.1 gate); queue lists product/net-quantity/district; e-commerce ingest auto-processed with manual scale; review → challan 201, second call 200 (same notice); PDF (2 pages) downloaded through the signed URL and text-verified.
+
+### Deferred
+- Mobile still cannot upload (needs bearer + real GPS) — Phase C.
+- Web overlay/queue/assign fixes — Phase D (backend contracts are now stable: boxes are `{x_min,y_min,x_max,y_max}` in original pixels).
+- Florence-2 remains opt-in (`SEMANTIC_ENGINE=florence2`); YOLO weights absent (geometric detector is primary).

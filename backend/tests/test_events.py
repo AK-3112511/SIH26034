@@ -48,13 +48,14 @@ def compile_geometry_sqlite(type_, compiler, **kw):
 
 
 import geoalchemy2.admin.dialects.sqlite
+
 geoalchemy2.admin.dialects.sqlite.after_create = lambda *args, **kwargs: None
 geoalchemy2.admin.dialects.sqlite.before_drop = lambda *args, **kwargs: None
 
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import Base
 from app.db.session import get_db, set_session_factory
-from app.models.enums import RuleStatus, ScanSource, ScanStatus, UserRole
+from app.models.enums import ScanSource, ScanStatus, UserRole
 from app.models.event import EventLog
 from app.models.scan import Scan
 from app.models.user import User
@@ -63,7 +64,6 @@ from app.services.events import (
     cleanup_expired_events,
     emit_scan_status_changed,
     emit_task_assigned,
-    get_events_for_user,
 )
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"

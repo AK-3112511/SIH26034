@@ -4,9 +4,9 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from typing import Any
 
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.event import EventLog
@@ -24,9 +24,9 @@ def dispatch_event(
     db: Session,
     event_type: str,
     payload: dict[str, Any],
-    target_user_id: Optional[uuid.UUID] = None,
-    target_district: Optional[str] = None,
-    target_role: Optional[str] = None,
+    target_user_id: uuid.UUID | None = None,
+    target_district: str | None = None,
+    target_role: str | None = None,
 ) -> EventLog:
     """Persist an event to the event_logs table for client polling delivery."""
     event = EventLog(
@@ -49,9 +49,9 @@ def emit_scan_status_changed(
     db: Session,
     scan_id: uuid.UUID | str,
     new_status: str,
-    rule_results: Optional[List[dict[str, Any]]] = None,
-    assigned_lmo_id: Optional[uuid.UUID | str] = None,
-    district: Optional[str] = None,
+    rule_results: list[dict[str, Any]] | None = None,
+    assigned_lmo_id: uuid.UUID | str | None = None,
+    district: str | None = None,
 ) -> EventLog:
     """Emit scan.status_changed event per §6.2.
     
@@ -59,7 +59,7 @@ def emit_scan_status_changed(
     - Pushed to assigned_lmo_id (mobile notification for field officer)
     - Pushed to all senior_lmo / admin dashboard sessions in that district (queue update)
     """
-    cleaned_rule_results: List[dict[str, Any]] = []
+    cleaned_rule_results: list[dict[str, Any]] = []
     if rule_results:
         for r in rule_results:
             if isinstance(r, dict):
@@ -94,6 +94,9 @@ def emit_task_assigned(
     scan_id: uuid.UUID | str,
     assigned_to_lmo_id: uuid.UUID | str,
     task_type: str = "field_followup",
+    instructions: str | None = None,
+    product_name: str | None = None,
+    platform: str | None = None,
 ) -> EventLog:
     """Emit task.assigned event per §6.2.
     
@@ -107,6 +110,9 @@ def emit_task_assigned(
         "scan_id": str(scan_id),
         "assigned_to_lmo_id": assigned_id_str,
         "task_type": task_type,
+        "instructions": instructions,
+        "product_name": product_name,
+        "platform": platform,
     }
 
     return dispatch_event(
@@ -122,9 +128,9 @@ def emit_task_assigned(
 def get_events_for_user(
     db: Session,
     current_user: User,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
     limit: int = 50,
-) -> List[EventLog]:
+) -> list[EventLog]:
     """Retrieve pending/historical events visible to current_user since given timestamp.
     
     Matches:

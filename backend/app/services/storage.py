@@ -1,8 +1,18 @@
 import os
+import re
 import uuid
 from abc import ABC, abstractmethod
 
 from app.core.config import settings
+
+_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def sanitize_filename(filename: str | None, default: str = "capture.jpg") -> str:
+    """Reduce a client-supplied filename to a short, filesystem-safe token."""
+    name = os.path.basename(filename or "").strip() or default
+    name = _SAFE_FILENAME.sub("_", name).strip("._") or default
+    return name[-80:]
 
 
 class StorageProvider(ABC):
@@ -10,7 +20,7 @@ class StorageProvider(ABC):
 
     @abstractmethod
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str:
-        """Store file bytes and return access URL/URI."""
+        """Store file bytes and return the storage key (local) or absolute URL (S3)."""
 
     @abstractmethod
     def get_file(self, file_path_or_key: str) -> bytes:
@@ -25,15 +35,15 @@ class LocalStorageProvider(StorageProvider):
         os.makedirs(self.base_dir, exist_ok=True)
 
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str:
-        unique_name = f"{uuid.uuid4()}_{filename}"
+        unique_name = f"{uuid.uuid4()}_{sanitize_filename(filename)}"
         file_path = os.path.join(self.base_dir, unique_name)
         with open(file_path, "wb") as f:
             f.write(file_bytes)
-        # Return URL relative to static mount
-        return f"/static/uploads/{unique_name}"
+        # Bare storage key; API responses turn it into a signed /files URL.
+        return unique_name
 
     def get_file(self, file_path_or_key: str) -> bytes:
-        filename = os.path.basename(file_path_or_key)
+        filename = os.path.basename(file_path_or_key.split("?", 1)[0])
         full_path = os.path.join(self.base_dir, filename)
         if not os.path.exists(full_path):
             raise FileNotFoundError(f"File not found in local storage: {full_path}")
@@ -59,7 +69,7 @@ class S3StorageProvider(StorageProvider):
             raise RuntimeError("boto3 package is required for S3StorageProvider. Install boto3 to use S3 storage backend.")
 
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str:
-        key = f"scans/{uuid.uuid4()}_{filename}"
+        key = f"scans/{uuid.uuid4()}_{sanitize_filename(filename)}"
         self.s3_client.put_object(
             Bucket=self.bucket_name,
             Key=key,

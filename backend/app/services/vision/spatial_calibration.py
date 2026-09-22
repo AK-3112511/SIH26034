@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import cv2
 import numpy as np
 
 from app.models.enums import ScanStatus
@@ -171,6 +172,54 @@ def compute_font_height_mm(
     return round(height_px * mm_per_px, 2)
 
 
+def measure_glyph_height_px(image: np.ndarray | None, bbox: dict[str, int], min_row_ink: float = 0.02) -> int | None:
+    """Measure the height of the numerals/capitals inside an OCR line box (source pixels).
+
+    Schedule II regulates the height of the *numerals*, not the OCR line box
+    (which includes padding and detector slack).  The crop is binarised and
+    split into connected components (glyphs).  Dots, punctuation and noise are
+    discarded; the reported height is the 70th percentile of the remaining
+    glyph heights, which in Latin type coincides with cap height — the height
+    of digits and capitals — while x-height-only letters sit below it and
+    ascender/descender letters sit at or just above it.
+    Returns ``None`` when the crop is unusable so the caller can fall back.
+    """
+    if image is None or image.size == 0 or not bbox:
+        return None
+    h, w = image.shape[:2]
+    x1 = max(0, int(bbox.get("x_min", 0)))
+    y1 = max(0, int(bbox.get("y_min", 0)))
+    x2 = min(w, int(bbox.get("x_max", 0)))
+    y2 = min(h, int(bbox.get("y_max", 0)))
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        return None
+    crop = image[y1:y2, x1:x2]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    # Text may be dark-on-light or light-on-dark; make ink the minority colour.
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if np.count_nonzero(binary) > binary.size / 2:
+        binary = cv2.bitwise_not(binary)
+    if binary.mean() / 255.0 < min_row_ink:
+        return None
+
+    count, _, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if count <= 1:
+        return None
+    heights = stats[1:, cv2.CC_STAT_HEIGHT].astype(float)
+    widths = stats[1:, cv2.CC_STAT_WIDTH].astype(float)
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(float)
+    crop_h = float(y2 - y1)
+    tallest = float(heights.max())
+    keep = (heights >= 0.35 * tallest) & (areas >= 4) & (heights < crop_h) & (widths < 0.6 * (x2 - x1))
+    glyphs = heights[keep]
+    if glyphs.size == 0:
+        return None
+    height = round(float(np.percentile(glyphs, 70)))
+    if height < 2:
+        return None
+    return height
+
+
 def compute_pdp_area_cm2(
     package_bbox: BoundingBox | None,
     mm_per_px: float,
@@ -208,11 +257,31 @@ class SpatialCalibrationService:
         self,
         preproc_result: PreprocessingResult,
         extraction_result: ExtractionResult,
+        source_image: np.ndarray | None = None,
+        measurement_origin: tuple[int, int] = (0, 0),
     ) -> SpatialMeasurementResult:
+        """``source_image`` is the image the field boxes refer to, shifted by
+        ``measurement_origin`` (boxes are in original-image coordinates; when the
+        measurement image is a crop, the crop's top-left is the origin)."""
+        self._measurement_origin = measurement_origin
         """
         Executes spatial calibration and attaches real-world metric measurements
         (font_height_mm and pdp_area_cm2) to extracted declarations.
         """
+        # 0. Manual calibration (e-commerce listings): the officer declared the
+        #    physical package size, so mm/px is known and no card is expected.
+        if preproc_result.manual_mm_per_px is not None and preproc_result.reference_card_bbox is None:
+            calib = CalibrationMetrics(
+                ratio_short=preproc_result.manual_mm_per_px,
+                ratio_long=preproc_result.manual_mm_per_px,
+                mm_per_px=preproc_result.manual_mm_per_px,
+                discrepancy_pct=0.0,
+                is_consistent=True,
+                status=ScanStatus.QUEUED,
+                reason="Manual dimension calibration (declared package size)",
+            )
+            return self._measure(preproc_result, extraction_result, calib, source_image)
+
         # 1. Calibration Failure Check
         if not preproc_result.is_calibration_successful or preproc_result.reference_card_bbox is None:
             calib = CalibrationMetrics(
@@ -257,12 +326,28 @@ class SpatialCalibrationService:
                 fields=extraction_result.fields,
             )
 
-        mm_per_px = calib.mm_per_px
+        return self._measure(preproc_result, extraction_result, calib, source_image)
+
+    def _measure(
+        self,
+        preproc_result: PreprocessingResult,
+        extraction_result: ExtractionResult,
+        calib: CalibrationMetrics,
+        source_image: np.ndarray | None,
+    ) -> SpatialMeasurementResult:
+        mm_per_px = calib.mm_per_px or 0.0
 
         # 3. PDP Area Computation (§4.3 Step 7)
         pkg_bbox = preproc_result.package_face_bbox
-        dewarped_shape = preproc_result.dewarped_package_image.shape[:2] if preproc_result.dewarped_package_image is not None else None
-        pdp_area_cm2 = compute_pdp_area_cm2(pkg_bbox, mm_per_px, dewarped_shape)
+        dewarped_shape = (
+            preproc_result.dewarped_package_image.shape[:2]
+            if preproc_result.dewarped_package_image is not None
+            else None
+        )
+        if preproc_result.manual_pdp_area_cm2 is not None:
+            pdp_area_cm2 = preproc_result.manual_pdp_area_cm2
+        else:
+            pdp_area_cm2 = compute_pdp_area_cm2(pkg_bbox, mm_per_px, dewarped_shape)
 
         pkg_w_mm = round(pkg_bbox.width * mm_per_px, 2) if pkg_bbox else (
             round(dewarped_shape[1] * mm_per_px, 2) if dewarped_shape else None
@@ -271,10 +356,26 @@ class SpatialCalibrationService:
             round(dewarped_shape[0] * mm_per_px, 2) if dewarped_shape else None
         )
 
-        # 4. Font Height Computation (§4.3 Step 6) for all extracted fields
+        # 4. Font Height Computation (§4.3 Step 6).  For the fields whose
+        #    numeral height is regulated we measure the ink extent; other fields
+        #    keep the line-box height as an indicative figure.
+        measured_fields = {"net_quantity", "mrp", "unit"}
         updated_fields: dict[str, ExtractedFieldResult] = {}
         for field_name, res in extraction_result.fields.items():
-            font_h_mm = compute_font_height_mm(res.bbox, mm_per_px)
+            glyph_px = None
+            if field_name in measured_fields:
+                ox, oy = getattr(self, "_measurement_origin", (0, 0))
+                local_bbox = {
+                    "x_min": res.bbox.get("x_min", 0) - ox,
+                    "y_min": res.bbox.get("y_min", 0) - oy,
+                    "x_max": res.bbox.get("x_max", 0) - ox,
+                    "y_max": res.bbox.get("y_max", 0) - oy,
+                }
+                glyph_px = measure_glyph_height_px(source_image, local_bbox)
+            if glyph_px is not None and mm_per_px > 0:
+                font_h_mm = round(glyph_px * mm_per_px, 2)
+            else:
+                font_h_mm = compute_font_height_mm(res.bbox, mm_per_px)
             updated_fields[field_name] = ExtractedFieldResult(
                 field_name=res.field_name,
                 raw_text=res.raw_text,

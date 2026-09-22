@@ -162,19 +162,21 @@ class RuleBasedSemanticMapper:
                         semantic_confidence=0.97,
                     )
 
-            # 6. Manufacturer Name
-            if "manufacturer_name" not in extracted:
-                is_mfg_anchor = any(text_lower.startswith(a) for a in MFG_ANCHORS)
-                is_corp = any(c in text_lower for c in CORP_INDICATORS)
-
-                if (is_mfg_anchor and len(text) > 10) or is_corp:
-                    extracted["manufacturer_name"] = ExtractedFieldResult(
-                        field_name="manufacturer_name",
-                        raw_text=text,
-                        bbox=line.bbox,
-                        ocr_confidence=line.confidence,
-                        semantic_confidence=0.95 if (is_mfg_anchor or is_corp) else 0.88,
-                    )
+            # 6. Manufacturer Name.  An explicit "Mfd by / Packed by" anchor is
+            #    the statutory declaration and always wins over a line that merely
+            #    contains a corporate word (a brand like "SUNRISE FOODS").
+            is_mfg_anchor = any(text_lower.startswith(a) for a in MFG_ANCHORS)
+            is_corp = any(c in text_lower for c in CORP_INDICATORS)
+            current = extracted.get("manufacturer_name")
+            current_anchored = bool(current and any(current.raw_text.lower().startswith(a) for a in MFG_ANCHORS))
+            if ((is_mfg_anchor and len(text) > 10) or is_corp) and (current is None or (is_mfg_anchor and not current_anchored)):
+                extracted["manufacturer_name"] = ExtractedFieldResult(
+                    field_name="manufacturer_name",
+                    raw_text=text,
+                    bbox=line.bbox,
+                    ocr_confidence=line.confidence,
+                    semantic_confidence=0.95 if is_mfg_anchor else 0.90,
+                )
 
             # Address candidate collection
             if any(k in text_lower for k in ("plot", "industrial", "phase", "road", "street", "bengaluru", "mumbai", "delhi", "nagar", "pincode")) or PINCODE_REGEX.search(text):
@@ -198,6 +200,35 @@ class RuleBasedSemanticMapper:
                 bbox={"x_min": min_x, "y_min": min_y, "x_max": max_x, "y_max": max_y},
                 ocr_confidence=avg_ocr_conf,
                 semantic_confidence=0.91,
+            )
+
+        # 8. Brand / product name: the tallest line of print that is mostly
+        #    letters and was not claimed by a mandatory declaration.  Brands are
+        #    set in the largest type on the principal display panel.  This is
+        #    indicative, not statutory, so its semantic confidence deliberately
+        #    sits below the gating threshold and never drives a verdict.
+        claimed_texts = {res.raw_text for res in extracted.values()}
+        candidates: list[tuple[int, OCRTextLine]] = []
+        for line in ocr_lines:
+            text = line.text.strip()
+            if not text or text in claimed_texts:
+                continue
+            letters = sum(ch.isalpha() for ch in text)
+            if len(text) < 3 or len(text) > 40 or letters < max(3, int(0.6 * len(text))):
+                continue
+            lowered = text.lower()
+            if any(k in lowered for k in ("mrp", "net ", "mfg", "mfd", "pkd", "packed", "care", "toll", "plot", "road", "@", "inclusive")):
+                continue
+            candidates.append((line.height_px, line))
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            best = candidates[0][1]
+            extracted["product_name"] = ExtractedFieldResult(
+                field_name="product_name",
+                raw_text=best.text.strip(),
+                bbox=best.bbox,
+                ocr_confidence=best.confidence,
+                semantic_confidence=0.75,
             )
 
         return extracted

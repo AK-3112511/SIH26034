@@ -1,17 +1,19 @@
 import os
 import sys
 import uuid
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.dialects.postgresql import JSONB, UUID, ENUM
+
 
 @compiles(JSONB, "sqlite")
 def compile_jsonb_sqlite(type_, compiler, **kw):
@@ -25,11 +27,11 @@ def compile_uuid_sqlite(type_, compiler, **kw):
 def compile_enum_sqlite(type_, compiler, **kw):
     return "TEXT"
 
+from app.core.security import decode_access_token, get_password_hash
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.enums import UserRole
 from app.models.user import User
-from app.models.audit_log import AuditLog
-from app.core.security import get_password_hash, decode_access_token
 from app.routers import auth
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"

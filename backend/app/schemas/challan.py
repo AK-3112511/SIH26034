@@ -1,6 +1,10 @@
 import uuid
 from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
+
+from app.schemas.common import OptionalSignedFileUrl
+
 
 class ChallanGenerateRequest(BaseModel):
     scan_id: uuid.UUID
@@ -9,7 +13,7 @@ class ChallanResponse(BaseModel):
     challan_id: uuid.UUID
     scan_id: uuid.UUID
     lmo_id: uuid.UUID | None = None
-    pdf_url: str | None = None
+    pdf_url: OptionalSignedFileUrl = None
     pdf_hash: str | None = None
     generated_at: datetime
 

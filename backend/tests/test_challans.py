@@ -2,24 +2,23 @@ import io
 import uuid
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
-
-from app.main import app
-from app.models.user import User
-from app.models.enums import UserRole, ScanStatus, ScanSource
-from app.models.scan import Scan
-from app.models.rule_result import RuleResult
-from app.core.deps import get_db, get_current_user
 import pytest
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ENUM
+from fastapi.testclient import TestClient
 from geoalchemy2 import Geometry
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.deps import get_current_user, get_db
 from app.db.base import Base
+from app.main import app
+from app.models.enums import ScanSource, ScanStatus, UserRole
+from app.models.rule_result import RuleResult
+from app.models.scan import Scan
+from app.models.user import User
+
 
 @compiles(UUID, "sqlite")
 def compile_uuid_sqlite(type_, compiler, **kw):
@@ -38,10 +37,11 @@ def compile_geometry_sqlite(type_, compiler, **kw):
     return "TEXT"
 
 import geoalchemy2.admin.dialects.sqlite
+
 geoalchemy2.admin.dialects.sqlite.after_create = lambda *args, **kwargs: None
 geoalchemy2.admin.dialects.sqlite.before_drop = lambda *args, **kwargs: None
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import event
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(
@@ -165,7 +165,7 @@ def test_generate_challan_missing_gps(test_db: Session):
     scan_id = uuid.uuid4()
     scan = Scan(
         scan_id=scan_id,
-        source=ScanSource.ECOMMERCE,
+        source=ScanSource.MOBILE,  # field capture: GPS is mandatory
         status=ScanStatus.FAILED,
         image_url="/static/fake.jpg",
         evidence_hash="hash",
@@ -201,8 +201,9 @@ def test_list_challans(test_db: Session):
     test_db.add(test_user)
     
     # Add dummy challan
-    from app.models.challan import Challan
     from datetime import datetime, timezone
+
+    from app.models.challan import Challan
     ch = Challan(
         challan_id=uuid.uuid4(),
         scan_id=uuid.uuid4(),
@@ -223,7 +224,8 @@ def test_list_challans(test_db: Session):
         data = response.json()
         assert data["total"] == 1
         assert len(data["items"]) == 1
-        assert data["items"][0]["pdf_url"] == "/static/fake.pdf"
+        # Stored keys are rendered as signed, time-limited download URLs.
+        assert data["items"][0]["pdf_url"].startswith("/api/v1/files/fake.pdf?exp=")
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_db, None)

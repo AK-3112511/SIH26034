@@ -1,13 +1,13 @@
 """Phase 7.1: Real-time event polling and assignment router per §6.2."""
-import uuid
+import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_admin, require_senior_lmo
 from app.db.session import get_db
+from app.models.enums import UserRole
 from app.models.scan import Scan
 from app.models.user import User
 from app.schemas.events import (
@@ -23,12 +23,14 @@ from app.services.events import (
     get_events_for_user,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/events", tags=["events"])
 
 
 @router.get("/poll", response_model=PollEventsResponse)
 def poll_events(
-    since: Optional[str] = Query(
+    since: str | None = Query(
         None,
         description="ISO 8601 timestamp cutoff (e.g. 2026-09-21T10:00:00Z). Returns events created strictly after this time.",
     ),
@@ -42,7 +44,7 @@ def poll_events(
     - Field LMOs receive scan.status_changed for their scans and task.assigned tasks.
     - Senior LMOs and Admins receive scan.status_changed queue updates for their district.
     """
-    parsed_since: Optional[datetime] = None
+    parsed_since: datetime | None = None
     if since and since.strip():
         raw = since.strip()
         # Handle unencoded plus in timezone offset replaced by space by HTTP decoders
@@ -61,9 +63,9 @@ def poll_events(
     # Opportunistic pruning of events older than 7 days
     try:
         cleanup_expired_events(db)
-    except Exception:
+    except Exception as exc:
         # Pruning failure must never block event delivery
-        pass
+        logger.warning("Event retention cleanup failed: %s", exc)
 
     events = get_events_for_user(db=db, current_user=current_user, since=parsed_since, limit=limit)
 
@@ -94,13 +96,20 @@ def assign_scan_task(
       payload: { scan_id, assigned_to_lmo_id, task_type: 'field_followup' }
       -> pushed to assigned_to_lmo_id (mobile Home screen new item)
     """
-    # Verify target field LMO exists
+    # The assignee must be an active field officer — assignments to desk roles
+    # or deactivated accounts would never be acted on.
     target_lmo = db.query(User).filter(User.id == body.assigned_to_lmo_id).first()
     if not target_lmo:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Target officer with ID '{body.assigned_to_lmo_id}' not found",
         )
+    if target_lmo.role != UserRole.FIELD_LMO or not target_lmo.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Field follow-ups can only be assigned to active field officers",
+        )
+    instructions = (body.instructions or "").strip() or None
 
     # Verify scan exists
     scan = db.query(Scan).filter(Scan.scan_id == body.scan_id).first()
@@ -110,8 +119,11 @@ def assign_scan_task(
             detail=f"Scan with ID '{body.scan_id}' not found",
         )
 
-    # Assign scan to field officer
+    # Assign scan to field officer.  Instructions are kept on the scan as the
+    # reviewer note when none exists yet so the mobile task card can show them.
     scan.assigned_lmo_id = body.assigned_to_lmo_id
+    if instructions and not scan.reviewer_note:
+        scan.reviewer_note = instructions
     db.commit()
     db.refresh(scan)
 
@@ -126,6 +138,7 @@ def assign_scan_task(
             "assigned_to_lmo_id": str(body.assigned_to_lmo_id),
             "task_type": body.task_type,
             "assigned_by": str(current_user.id),
+            "instructions": instructions,
         },
     )
 
@@ -135,6 +148,9 @@ def assign_scan_task(
         scan_id=scan.scan_id,
         assigned_to_lmo_id=body.assigned_to_lmo_id,
         task_type=body.task_type,
+        instructions=instructions,
+        product_name=scan.product_name,
+        platform=scan.platform,
     )
 
     return AssignTaskResponse(

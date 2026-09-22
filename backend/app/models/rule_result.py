@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import RuleStatus
+from app.models.enums import RuleStatus, enum_values
 
 if TYPE_CHECKING:
     from app.models.scan import Scan
@@ -29,7 +29,7 @@ class RuleResult(Base):
     )
     rule_id: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[RuleStatus] = mapped_column(
-        ENUM(RuleStatus, name="rule_status_enum", create_type=False),
+        ENUM(RuleStatus, name="rule_status_enum", create_type=False, values_callable=enum_values),
         nullable=False
     )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Text, func
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,6 +29,7 @@ class Challan(Base):
     )
     lmo_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True
     )
     pdf_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -41,3 +42,8 @@ class Challan(Base):
 
     # Relationships
     scan: Mapped[Scan] = relationship("Scan", back_populates="challans")
+
+    __table_args__ = (
+        # One Section 39 notice per scan — regeneration returns the existing record.
+        UniqueConstraint("scan_id", name="uq_challans_scan"),
+    )

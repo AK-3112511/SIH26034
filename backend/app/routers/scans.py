@@ -1,7 +1,7 @@
-"""Phase 4: full scan router — ingest, list (queue), detail, review, ingest-derived."""
+"""Scan endpoints: ingest (mobile + e-commerce), queue listing, detail, review, hash verification."""
+import logging
 import uuid
-from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
 from fastapi import (
     APIRouter,
@@ -15,65 +15,83 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import Text, func, or_
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, case, and_, or_, Text
 
+from app.core.deps import get_current_user, require_senior_lmo
 from app.db.session import get_db
-from app.models.scan import Scan
+from app.models.audit_log import AuditLog
+from app.models.enums import RuleStatus, ScanSource, ScanStatus, UserRole
 from app.models.extracted_field import ExtractedField
-from app.models.enums import ScanSource, ScanStatus, RuleStatus
+from app.models.scan import Scan
 from app.models.user import User
 from app.schemas.scan import (
-    ScanIngestResponse,
-    ScanDetailResponse,
-    ScanListResponse,
-    ScanListItem,
+    AssignedScanItem,
+    DashboardStatsResponse,
+    HashVerificationResponse,
     ReviewSubmitRequest,
     ReviewSubmitResponse,
-    DashboardStatsResponse,
-    IngestDerivedRequest,
-    HashVerificationResponse,
-    AssignedScanItem,
+    ScanDetailResponse,
+    ScanIngestResponse,
+    ScanListItem,
+    ScanListResponse,
 )
-from app.services.storage import get_storage_provider
-from app.services.hash_vault import compute_section_65b_hash
-from app.models.audit_log import AuditLog
 from app.services.audit import log_audit, log_status_change
+from app.services.district import known_districts, normalise_district, resolve_district_label
 from app.services.events import emit_scan_status_changed
+from app.services.hash_vault import compute_section_65b_hash
 from app.services.pipeline_orchestrator import process_queued_scans, process_scan
-from app.services.district import resolve_district_label
-from app.core.deps import get_current_user, require_senior_lmo
+from app.services.storage import get_storage_provider
+from app.services.uploads import read_validated_image
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/scans", tags=["scans"])
+
+
+def _assert_can_view(scan: Scan, user: User) -> None:
+    """Field officers may only read scans they captured or were assigned; seniors/admins read all."""
+    if user.role == UserRole.FIELD_LMO and user.id not in (scan.captured_by_id, scan.assigned_lmo_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this scan")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _derive_scan_list_item(scan: Scan, now: datetime, db: Optional[Session] = None) -> ScanListItem:
+def _derive_scan_list_item(
+    scan: Scan, now: datetime, db: Session | None = None, users: dict | None = None
+) -> ScanListItem:
     """Build a compact queue item from a Scan ORM object."""
-    # Best-effort product name from extracted fields
-    product_name: Optional[str] = None
+    # Product identity: officer-entered name first, then extracted brand / manufacturer.
+    product_name: str | None = scan.product_name
+    net_quantity: str | None = None
     confidences = []
     for ef in scan.extracted_fields:
-        if ef.field_name in ("net_quantity", "brand_name", "product_name") and ef.raw_text:
-            if product_name is None:
-                product_name = ef.raw_text
+        if ef.field_name in ("product_name", "brand_name") and ef.raw_text and product_name is None:
+            product_name = ef.raw_text
+        if ef.field_name == "net_quantity" and ef.raw_text and net_quantity is None:
+            net_quantity = ef.raw_text
         if ef.ocr_confidence is not None:
             confidences.append(ef.ocr_confidence)
+    if product_name is None:
+        for ef in scan.extracted_fields:
+            if ef.field_name == "manufacturer_name" and ef.raw_text:
+                product_name = ef.raw_text
+                break
 
-    confidence_gap: Optional[float] = None
+    confidence_gap: float | None = None
     if len(confidences) >= 2:
         confidence_gap = round(max(confidences) - min(confidences), 4)
     elif len(confidences) == 1:
         confidence_gap = 0.0
 
-    age_hours: Optional[float] = None
+    age_hours: float | None = None
     if scan.created_at:
         delta = now - scan.created_at.replace(tzinfo=timezone.utc) if scan.created_at.tzinfo is None else now - scan.created_at
         age_hours = round(delta.total_seconds() / 3600, 2)
 
-    district_label = resolve_district_label(scan, db)
+    district_label = resolve_district_label(scan, db, users)
 
     return ScanListItem(
         scan_id=scan.scan_id,
@@ -85,6 +103,7 @@ def _derive_scan_list_item(scan: Scan, now: datetime, db: Optional[Session] = No
         captured_at_utc=scan.captured_at_utc,
         created_at=scan.created_at,
         product_name=product_name,
+        net_quantity=net_quantity,
         district_label=district_label,
         confidence_gap=confidence_gap,
         age_hours=age_hours,
@@ -136,16 +155,16 @@ def get_dashboard_stats(
 
 @router.get("/", response_model=ScanListResponse)
 def list_scans(
-    status_filter: Optional[ScanStatus] = Query(None, alias="status"),
-    district: Optional[str] = Query(None),
-    source: Optional[ScanSource] = Query(None),
-    q: Optional[str] = Query(None, description="Search query for product name, field, or scan ID"),
-    confidence_band: Optional[str] = Query(
+    status_filter: ScanStatus | None = Query(None, alias="status"),
+    district: str | None = Query(None),
+    source: ScanSource | None = Query(None),
+    q: str | None = Query(None, description="Search query for product name, field, or scan ID"),
+    confidence_band: str | None = Query(
         None,
         pattern="^(critical|moderate|low)$",
         description="Filter by OCR confidence gap: critical ≥30%, moderate 15–30%, low <15%",
     ),
-    age_band: Optional[str] = Query(
+    age_band: str | None = Query(
         None,
         pattern="^(today|older)$",
         description="Filter by scan age: today <24h, older ≥24h",
@@ -157,7 +176,12 @@ def list_scans(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_senior_lmo),
 ):
-    """Paginated scan list for the Review Queue. Supports filtering and sorting."""
+    """Paginated scan list for the Review Queue.
+
+    Status, source, free-text search and the created-at sort run in SQL.  The
+    district, confidence-gap and age facets are derived per row, so they are
+    applied after the SQL filter over the (already narrowed) candidate set.
+    """
     query = db.query(Scan).options(
         joinedload(Scan.extracted_fields),
         joinedload(Scan.rule_results),
@@ -167,67 +191,80 @@ def list_scans(
         query = query.filter(Scan.status == status_filter)
     if source:
         query = query.filter(Scan.source == source)
-
     if q and q.strip():
         search_term = f"%{q.strip()}%"
         query = query.filter(
             or_(
+                Scan.product_name.ilike(search_term),
                 Scan.extracted_fields.any(ExtractedField.raw_text.ilike(search_term)),
-                func.cast(Scan.scan_id, Text).ilike(search_term)
+                func.cast(Scan.scan_id, Text).ilike(search_term),
             )
         )
+    if age_band == "today":
+        query = query.filter(Scan.created_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+    elif age_band == "older":
+        query = query.filter(Scan.created_at < datetime.now(timezone.utc) - timedelta(hours=24))
 
-    all_scans = query.all()
+    needs_derived_filter = bool(confidence_band) or bool(district and district.strip() and district.lower() != "all")
+    needs_derived_sort = sort_by == "confidence_gap"
+    order = Scan.created_at.desc() if sort_dir == "desc" else Scan.created_at.asc()
+    query = query.order_by(order)
+
     now = datetime.now(timezone.utc)
-    items = [_derive_scan_list_item(s, now, db) for s in all_scans]
+    if not needs_derived_filter and not needs_derived_sort:
+        total = query.order_by(None).count()
+        page_scans = query.offset((page - 1) * page_size).limit(page_size).all()
+        users = _preload_officers(db, page_scans)
+        items = [_derive_scan_list_item(s_, now, db, users) for s_ in page_scans]
+        return ScanListResponse(items=items, total=total, page=page, page_size=page_size)
 
-    # Filter by district if specified
+    # Derived facets: evaluate over the SQL-narrowed set (bounded for safety).
+    all_scans = query.limit(2000).all()
+    users = _preload_officers(db, all_scans)
+    items = [_derive_scan_list_item(s_, now, db, users) for s_ in all_scans]
+
     if district and district.strip() and district.lower() != "all":
-        d_lower = district.strip().lower()
-        items = [item for item in items if item.district_label and d_lower in item.district_label.lower()]
+        wanted = normalise_district(district)
+        items = [item for item in items if normalise_district(item.district_label) == wanted]
 
     if confidence_band == "critical":
         items = [item for item in items if (item.confidence_gap or 0) >= 0.30]
     elif confidence_band == "moderate":
-        items = [
-            item for item in items
-            if 0.15 <= (item.confidence_gap or 0) < 0.30
-        ]
+        items = [item for item in items if 0.15 <= (item.confidence_gap or 0) < 0.30]
     elif confidence_band == "low":
         items = [item for item in items if (item.confidence_gap or 0) < 0.15]
 
-    if age_band == "today":
-        items = [item for item in items if (item.age_hours or 0) < 24]
-    elif age_band == "older":
-        items = [item for item in items if (item.age_hours or 0) >= 24]
+    if needs_derived_sort:
+        items.sort(key=lambda x: (x.confidence_gap or 0), reverse=(sort_dir == "desc"))
 
     total = len(items)
-
-    # Sorting
-    if sort_by == "confidence_gap":
-        items.sort(
-            key=lambda x: (x.confidence_gap or 0),
-            reverse=(sort_dir == "desc")
-        )
-    else:
-        # created_at or age
-        items.sort(
-            key=lambda x: x.created_at,
-            reverse=(sort_dir == "desc")
-        )
-
     paginated = items[(page - 1) * page_size : page * page_size]
+    return ScanListResponse(items=paginated, total=total, page=page, page_size=page_size)
 
-    return ScanListResponse(
-        items=paginated,
-        total=total,
-        page=page,
-        page_size=page_size,
-    )
+
+def _preload_officers(db: Session, scans: list[Scan]) -> dict:
+    """One query for every officer referenced by the page instead of one per scan."""
+    ids = {sid for s_ in scans for sid in (s_.captured_by_id, s_.assigned_lmo_id) if sid}
+    if not ids:
+        return {}
+    return {u.id: u for u in db.query(User).filter(User.id.in_(ids)).all()}
 
 
 # ---------------------------------------------------------------------------
-# POST /scans/ingest  — standard mobile ingestion (unchanged)
+# GET /scans/districts  — filter options for the queue (must come before /{scan_id})
+# ---------------------------------------------------------------------------
+
+@router.get("/districts", response_model=list[str])
+def list_districts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_senior_lmo),
+):
+    """Districts officers are posted to, plus the city labels GPS resolution can produce."""
+    return known_districts(db)
+
+
+# ---------------------------------------------------------------------------
+# POST /scans/ingest  — field mobile ingestion (authenticated)
 # ---------------------------------------------------------------------------
 
 @router.post("/ingest", response_model=ScanIngestResponse, status_code=status.HTTP_201_CREATED)
@@ -235,26 +272,32 @@ async def ingest_scan(
     request: Request,
     background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
-    lat: Optional[float] = Form(None),
-    lng: Optional[float] = Form(None),
-    captured_at_utc: Optional[datetime] = Form(None),
-    device_id: Optional[str] = Form(None),
-    reference_object_type: Optional[str] = Form(None),
-    source: Optional[ScanSource] = Form(ScanSource.MOBILE),
+    lat: float | None = Form(None),
+    lng: float | None = Form(None),
+    captured_at_utc: datetime | None = Form(None),
+    device_id: str | None = Form(None),
+    reference_object_type: str | None = Form(None),
+    product_type: str | None = Form(None, pattern="^(box|bottle|other)$"),
+    product_name: str | None = Form(None, max_length=200),
+    source: ScanSource | None = Form(ScanSource.MOBILE),
     auto_process: bool = Form(True),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Ingest a field mobile scan.
 
     Computes Section 65B cryptographic hash, uploads image to object storage,
-    persists scan record with status QUEUED, and logs audit event.
+    persists scan record with status QUEUED, and logs audit event.  The
+    authenticated officer is recorded as ``captured_by_id`` (chain of custody).
     """
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded image file is empty"
-        )
+    image_bytes, content_type, filename = await read_validated_image(image)
+    # The capture timestamp is part of the Section 65B canonical payload: the
+    # value that is hashed must be exactly the value that is persisted.
+    now_utc = datetime.now(timezone.utc)
+    if captured_at_utc is None:
+        captured_at_utc = now_utc
+    elif captured_at_utc.tzinfo is None:
+        captured_at_utc = captured_at_utc.replace(tzinfo=timezone.utc)
 
     evidence_hash = compute_section_65b_hash(
         image_bytes=image_bytes,
@@ -265,8 +308,6 @@ async def ingest_scan(
     )
 
     storage = get_storage_provider()
-    filename = image.filename or "capture.jpg"
-    content_type = image.content_type or "image/jpeg"
     image_url = storage.upload_file(
         file_bytes=image_bytes,
         filename=filename,
@@ -274,7 +315,6 @@ async def ingest_scan(
     )
 
     scan_id = uuid.uuid4()
-    now_utc = datetime.now(timezone.utc)
     scan = Scan(
         scan_id=scan_id,
         source=source or ScanSource.MOBILE,
@@ -282,8 +322,12 @@ async def ingest_scan(
         evidence_hash=evidence_hash,
         lat=lat,
         lng=lng,
-        captured_at_utc=captured_at_utc or now_utc,
+        captured_at_utc=captured_at_utc,
         status=ScanStatus.QUEUED,
+        captured_by_id=current_user.id,
+        reference_object_type=reference_object_type,
+        product_type=product_type,
+        product_name=(product_name or "").strip() or None,
     )
     db.add(scan)
     db.commit()
@@ -295,6 +339,7 @@ async def ingest_scan(
         action="SCAN_INGESTED",
         target_type="scan",
         target_id=str(scan.scan_id),
+        actor_id=current_user.id,
         detail={
             "status": scan.status.value,
             "source": scan.source.value,
@@ -303,11 +348,7 @@ async def ingest_scan(
             "evidence_hash": evidence_hash,
             "image_url": image_url,
             "ip_address": client_ip,
-
-        
-
         },
-
     )
 
     # Dispatch full processing pipeline asynchronously if auto_process is enabled
@@ -337,9 +378,12 @@ async def ingest_derived_scan(
     platform: str = Form(...),
     package_height_mm: float = Form(...),
     package_width_mm: float = Form(...),
-    package_depth_mm: Optional[float] = Form(None),
-    declared_net_quantity: Optional[str] = Form(None),
-    platform_url: Optional[str] = Form(None),
+    package_depth_mm: float | None = Form(None),
+    declared_net_quantity: str | None = Form(None),
+    platform_url: str | None = Form(None),
+    product_name: str | None = Form(None, max_length=200),
+    auto_process: bool = Form(True),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_senior_lmo),
 ):
@@ -349,42 +393,40 @@ async def ingest_derived_scan(
     mm_per_px equivalent is computed from declared physical dimensions rather than
     the reference card. Rest of the pipeline (Module 2 + 3) is unchanged.
     """
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded image file is empty"
-        )
+    if not (0 < package_height_mm <= 5000 and 0 < package_width_mm <= 5000):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Package dimensions must be between 0 and 5000 mm")
+    image_bytes, content_type, filename = await read_validated_image(image)
 
+    # The capture timestamp is part of the Section 65B canonical payload, so the
+    # same value must be hashed and persisted.
+    now_utc = datetime.now(timezone.utc)
     # For e-commerce screenshots, GPS is the web server's — not evidentiary, set null
     evidence_hash = compute_section_65b_hash(
         image_bytes=image_bytes,
         lat=None,
         lng=None,
-        captured_at_utc=datetime.now(timezone.utc),
+        captured_at_utc=now_utc,
         device_id=f"web:{current_user.id}"
     )
 
     storage = get_storage_provider()
-    filename = image.filename or "ecommerce_screenshot.jpg"
-    content_type = image.content_type or "image/jpeg"
     image_url = storage.upload_file(
         file_bytes=image_bytes,
         filename=filename,
         content_type=content_type
     )
 
-    now_utc = datetime.now(timezone.utc)
     # §3.2 Manual Dimension Calibration Path:
     # Instead of detecting a reference card, physical dimensions (package_height_mm, package_width_mm)
     # are mapped to the screenshot pixels to compute the exact mm_per_px calibration ratio and PDP area.
     # This feeds directly into the same downstream spatial calibration pipeline without a separate pipeline.
-    mm_per_px_val: Optional[float] = None
-    pdp_area_val: Optional[float] = None
+    mm_per_px_val: float | None = None
+    pdp_area_val: float | None = None
 
     try:
-        from PIL import Image as PILImage
         import io
+
+        from PIL import Image as PILImage
         img = PILImage.open(io.BytesIO(image_bytes))
         img_w, img_h = img.size
         # Long edge of the package face maps to the long dimension of the product image
@@ -409,9 +451,11 @@ async def ingest_derived_scan(
         captured_at_utc=now_utc,
         mm_per_px=mm_per_px_val,
         pdp_area_cm2=pdp_area_val,
-        ruleset_version="2026.1",
         status=ScanStatus.QUEUED,
-        assigned_lmo_id=current_user.id,
+        captured_by_id=current_user.id,
+        platform=platform.strip() or None,
+        product_name=(product_name or "").strip() or None,
+        reference_object_type="manual",
     )
     db.add(scan)
     db.commit()
@@ -453,6 +497,9 @@ async def ingest_derived_scan(
         }
     )
 
+    if auto_process and background_tasks is not None:
+        background_tasks.add_task(process_scan, scan.scan_id)
+
     return ScanIngestResponse(
         scan_id=scan.scan_id,
         status=scan.status,
@@ -472,6 +519,7 @@ async def ingest_derived_scan(
 def trigger_scan_process(
     scan_id: uuid.UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_senior_lmo),
 ):
     """
     Synchronously triggers or re-runs the full MetrologyAI pipeline (Phases 3.1 -> 3.5)
@@ -501,6 +549,7 @@ def trigger_scan_process(
 def trigger_batch_process_queued(
     limit: int = Query(10, ge=1, le=100, description="Max queued scans to process"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_senior_lmo),
 ):
     """
     Batch processes pending QUEUED scans up to limit and returns updated records.
@@ -546,15 +595,11 @@ def get_scans_assigned_to_me(
         instructions = None
         rule_violations: list[str] = []
 
+        product_name = s.product_name
+        platform = s.platform
         for ef in s.extracted_fields:
-            if ef.field_name in ("net_quantity", "brand_name", "product_name") and ef.raw_text:
-                if product_name is None:
-                    product_name = ef.raw_text
-            if ef.field_name == "declared_dimensions" and ef.raw_text and "platform:" in ef.raw_text:
-                parts = ef.raw_text.split("|")
-                for p in parts:
-                    if "platform:" in p:
-                        platform = p.replace("platform:", "").strip()
+            if ef.field_name in ("product_name", "brand_name", "manufacturer_name") and ef.raw_text and product_name is None:
+                product_name = ef.raw_text
 
         for rr in s.rule_results:
             if rr.status == RuleStatus.FAIL:
@@ -573,8 +618,8 @@ def get_scans_assigned_to_me(
                 source=s.source,
                 status=s.status,
                 image_url=s.image_url,
-                product_name=product_name or ("E-Commerce Package" if s.source == ScanSource.ECOMMERCE else "Field Inspection Item"),
-                platform=platform or ("Blinkit" if s.source == ScanSource.ECOMMERCE else None),
+                product_name=product_name or ("E-commerce listing" if s.source == ScanSource.ECOMMERCE else "Field inspection item"),
+                platform=platform,
                 task_type="field_followup",
                 assigned_at_utc=s.created_at,
                 reviewer_note=s.reviewer_note,
@@ -608,6 +653,7 @@ def get_scan(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Scan with ID '{scan_id}' not found",
         )
+    _assert_can_view(scan, current_user)
 
     return ScanDetailResponse.model_validate(scan)
 
@@ -633,18 +679,20 @@ def review_scan(
     if not scan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
 
-    if scan.status not in (ScanStatus.PENDING_REVIEW, ScanStatus.CALIBRATION_FAILED):
+    if scan.status in (ScanStatus.QUEUED, ScanStatus.PROCESSING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Scan is in status '{scan.status.value}' — only PENDING_REVIEW scans can be reviewed"
+            detail="This scan is still being processed; wait for the automated verdict before reviewing",
+        )
+    if scan.status in (ScanStatus.PASSED, ScanStatus.FAILED) and current_user.role != UserRole.ADMIN and scan.reviewer_note:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This scan already carries a reviewed verdict; only an administrator can re-adjudicate it",
         )
 
     old_status = scan.status
     original_field_lmo_id = scan.assigned_lmo_id
     scan.status = body.decision
-    # Keep original field officer assigned, or assign reviewer if unassigned
-    if not scan.assigned_lmo_id:
-        scan.assigned_lmo_id = current_user.id
     scan.reviewer_note = body.reviewer_note
 
     # Apply field overrides if provided
@@ -694,11 +742,11 @@ def review_scan(
             scan_id=scan.scan_id,
             new_status=scan.status.value,
             rule_results=rule_summaries,
-            assigned_lmo_id=original_field_lmo_id or scan.assigned_lmo_id,
+            assigned_lmo_id=scan.captured_by_id or original_field_lmo_id or scan.assigned_lmo_id,
             district=district_label,
         )
-    except Exception:
-        pass
+    except Exception as event_err:  # event delivery must never block a legal decision
+        logger.warning("Failed to emit scan.status_changed for %s: %s", scan.scan_id, event_err)
 
     return ReviewSubmitResponse(
         scan_id=scan.scan_id,
@@ -727,12 +775,18 @@ def verify_scan_hash(
     scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    _assert_can_view(scan, current_user)
 
-    # Fetch ingest audit log to retrieve the original device_id used during hashing
-    audit = db.query(AuditLog).filter(
-        AuditLog.target_id == str(scan_id),
-        AuditLog.action.in_(["SCAN_INGESTED", "SCAN_INGESTED_DERIVED"])
-    ).first()
+    # The ingest audit entry holds the device_id that was part of the canonical payload.
+    audit = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.target_id == str(scan_id),
+            AuditLog.action.in_(["SCAN_INGESTED", "SCAN_INGESTED_DERIVED"]),
+        )
+        .order_by(AuditLog.timestamp.asc())
+        .first()
+    )
     
     device_id = None
     if audit and audit.detail:

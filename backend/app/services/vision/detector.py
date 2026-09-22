@@ -82,6 +82,15 @@ class DetectorProtocol(Protocol):
         ...
 
 
+def _bbox_iou(a: BoundingBox, b: BoundingBox) -> float:
+    ix = max(0, min(a.x_max, b.x_max) - max(a.x_min, b.x_min))
+    iy = max(0, min(a.y_max, b.y_max) - max(a.y_min, b.y_min))
+    inter = ix * iy
+    if inter == 0:
+        return 0.0
+    return inter / float(a.area + b.area - inter)
+
+
 class GeometricCVDetector:
     """
     Deterministic Computer Vision detector using multi-channel gradient boundaries,
@@ -117,79 +126,83 @@ class GeometricCVDetector:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
         blurred = cv2.GaussianBlur(gray, (5, 5), 1.5)
 
-        # Multi-scale edge detection for robust contour discovery
-        edges = cv2.Canny(blurred, 40, 140)
+        # Edge maps at several sensitivities: a fixed Canny threshold misses
+        # low-contrast cards on dark tables and drowns in texture on bright
+        # ones.  The median-based pair adapts to exposure; CLAHE recovers
+        # edges in shadow.  Candidates from every map are pooled and deduped.
+        median = float(np.median(blurred))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(blurred)
+        edge_maps = [
+            cv2.Canny(blurred, 40, 140),
+            cv2.Canny(blurred, max(0, int(0.66 * median)), min(255, int(1.33 * median))),
+            cv2.Canny(clahe, 50, 150),
+        ]
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.dilate(edges, kernel, iterations=1)
-
-        contours, _ = cv2.findContours(
-            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
 
         card_candidates: list[tuple[float, BoundingBox]] = []
         package_candidates: list[BoundingBox] = []
 
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < total_area * self.min_card_area_ratio:
-                continue
+        for edges in edge_maps:
+            dilated = cv2.dilate(edges, kernel, iterations=1)
+            contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area < total_area * self.min_card_area_ratio:
+                    continue
 
-            # Candidate for package face (large dominant central region)
-            if area > total_area * 0.15:
-                x, y, bw, bh = cv2.boundingRect(cnt)
-                package_candidates.append(
-                    BoundingBox(
-                        x_min=x,
-                        y_min=y,
-                        x_max=x + bw,
-                        y_max=y + bh,
-                        confidence=float(min(area / total_area, 0.98)),
-                        label="package_face",
+                # Candidate for package face (large dominant region)
+                if area > total_area * 0.15:
+                    x, y, bw, bh = cv2.boundingRect(cnt)
+                    package_candidates.append(
+                        BoundingBox(
+                            x_min=x, y_min=y, x_max=x + bw, y_max=y + bh,
+                            confidence=float(min(area / total_area, 0.98)),
+                            label="package_face",
+                        )
                     )
-                )
 
-            # Candidate for reference card
-            if total_area * self.min_card_area_ratio <= area <= total_area * self.max_card_area_ratio:
+                if not (total_area * self.min_card_area_ratio <= area <= total_area * self.max_card_area_ratio):
+                    continue
                 peri = cv2.arcLength(cnt, True)
-                approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+                quad = None
+                for eps in (0.02, 0.03, 0.045):
+                    approx = cv2.approxPolyDP(cnt, eps * peri, True)
+                    if len(approx) == 4 and cv2.isContourConvex(approx):
+                        quad = approx
+                        break
+                if quad is None:
+                    continue
+                pts = quad.reshape((4, 2)).astype(np.float32)
+                ordered_pts = order_quad_corners(pts)
+                (tl, tr, br, bl) = ordered_pts
+                cand_w = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2.0
+                cand_h = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2.0
+                if min(cand_w, cand_h) <= 0:
+                    continue
+                cand_ratio = max(cand_w, cand_h) / min(cand_w, cand_h)
+                if not (self.aspect_ratio_min <= cand_ratio <= self.aspect_ratio_max):
+                    continue
+                # Rectangularity: how much of the quad's hull the contour fills.
+                fill = float(area) / max(1.0, float(cv2.contourArea(quad)))
+                diff = abs(cand_ratio - ISO_CARD_ASPECT_RATIO)
+                card_conf = float(np.clip((1.0 - (diff / 0.40)) * min(1.0, 0.85 + 0.15 * fill), 0.50, 0.98))
 
-                # Reference card is a convex quadrilateral
-                if len(approx) == 4 and cv2.isContourConvex(approx):
-                    pts = approx.reshape((4, 2))
-                    ordered_pts = order_quad_corners(pts)
-
-                    (tl, tr, br, bl) = ordered_pts
-                    top_w = np.linalg.norm(tr - tl)
-                    bot_w = np.linalg.norm(br - bl)
-                    left_h = np.linalg.norm(bl - tl)
-                    right_h = np.linalg.norm(br - tr)
-
-                    cand_w = (top_w + bot_w) / 2.0
-                    cand_h = (left_h + right_h) / 2.0
-
-                    if min(cand_w, cand_h) > 0:
-                        cand_ratio = max(cand_w, cand_h) / min(cand_w, cand_h)
-
-                        if self.aspect_ratio_min <= cand_ratio <= self.aspect_ratio_max:
-                            diff = abs(cand_ratio - ISO_CARD_ASPECT_RATIO)
-                            # Closeness to nominal 1.58577 ratio yields confidence score
-                            card_conf = float(np.clip(1.0 - (diff / 0.40), 0.50, 0.98))
-
-                            bx_min = int(np.min(pts[:, 0]))
-                            by_min = int(np.min(pts[:, 1]))
-                            bx_max = int(np.max(pts[:, 0]))
-                            by_max = int(np.max(pts[:, 1]))
-
-                            card_bbox = BoundingBox(
-                                x_min=bx_min,
-                                y_min=by_min,
-                                x_max=bx_max,
-                                y_max=by_max,
-                                confidence=card_conf,
-                                label="reference_card",
-                                corners=ordered_pts,
-                            )
-                            card_candidates.append((card_conf, card_bbox))
+                bx_min, by_min = int(pts[:, 0].min()), int(pts[:, 1].min())
+                bx_max, by_max = int(pts[:, 0].max()), int(pts[:, 1].max())
+                candidate = BoundingBox(
+                    x_min=bx_min, y_min=by_min, x_max=bx_max, y_max=by_max,
+                    confidence=card_conf, label="reference_card", corners=ordered_pts,
+                )
+                # Dedupe near-identical candidates from different edge maps.
+                duplicate = False
+                for idx, (conf, existing) in enumerate(card_candidates):
+                    if _bbox_iou(existing, candidate) > 0.8:
+                        duplicate = True
+                        if card_conf > conf:
+                            card_candidates[idx] = (card_conf, candidate)
+                        break
+                if not duplicate:
+                    card_candidates.append((card_conf, candidate))
 
         # Select highest confidence reference card
         best_card: BoundingBox | None = None
@@ -354,8 +367,11 @@ def get_detector(
         model_path: Optional path to custom trained YOLOv8 weights.
     """
     clean_engine = engine.lower().strip()
+    if clean_engine == "auto":
+        from app.core.config import settings
 
-    if clean_engine == DetectorEngine.CV_GEOM.value:
+        clean_engine = settings.DETECTOR_ENGINE.lower().strip()
+    if clean_engine in (DetectorEngine.CV_GEOM.value, "geometric"):
         return GeometricCVDetector()
 
     # If explicit path not provided, check default location

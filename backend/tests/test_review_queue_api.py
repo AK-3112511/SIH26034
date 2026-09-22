@@ -1,19 +1,21 @@
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from geoalchemy2 import Geometry
 from sqlalchemy import create_engine, event
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.dialects.postgresql import JSONB, UUID, ENUM
-from geoalchemy2 import Geometry
+
 
 @compiles(JSONB, "sqlite")
 def compile_jsonb_sqlite(type_, compiler, **kw):
@@ -32,20 +34,21 @@ def compile_geometry_sqlite(type_, compiler, **kw):
     return "TEXT"
 
 import geoalchemy2.admin.dialects.sqlite
+
 geoalchemy2.admin.dialects.sqlite.after_create = lambda *args, **kwargs: None
 geoalchemy2.admin.dialects.sqlite.before_drop = lambda *args, **kwargs: None
 
+from app.core.security import create_access_token, get_password_hash
 from app.db.base import Base
 from app.db.session import get_db
-from app.models.enums import UserRole, ScanStatus, ScanSource, RuleStatus
-from app.models.user import User
-from app.models.scan import Scan
+from app.models.audit_log import AuditLog
+from app.models.enums import ScanSource, ScanStatus, UserRole
 from app.models.extracted_field import ExtractedField
 from app.models.rule_result import RuleResult
-from app.models.audit_log import AuditLog
-from app.core.security import get_password_hash, create_access_token
-from app.routers import scans, auth
-from app.db.seed_scans import seed_pending_review_scans
+from app.models.scan import Scan
+from app.models.user import User
+from app.routers import auth, scans
+from tests.fixtures import seed_pending_review_scans
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
@@ -351,6 +354,7 @@ def test_scan_detail_and_review_decision():
 def test_ecommerce_ingest_derived_manual_calibration():
     """Confirm POST /scans/ingest-derived calculates mm_per_px and pdp_area_cm2 from manual dimensions."""
     import io
+
     from PIL import Image
 
     # Create dummy 1000x500 image

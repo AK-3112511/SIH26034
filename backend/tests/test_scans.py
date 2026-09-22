@@ -40,6 +40,7 @@ import geoalchemy2.admin.dialects.sqlite
 geoalchemy2.admin.dialects.sqlite.after_create = lambda *args, **kwargs: None
 geoalchemy2.admin.dialects.sqlite.before_drop = lambda *args, **kwargs: None
 
+from app.core.deps import get_current_user
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
@@ -48,8 +49,8 @@ from app.models.extracted_field import ExtractedField
 from app.models.rule_result import RuleResult
 from app.models.scan import Scan
 from app.routers import scans
-from app.core.deps import get_current_user
 from app.services.hash_vault import compute_section_65b_hash, verify_section_65b_hash
+from tests.conftest import TINY_JPEG
 
 # In-memory SQLite database for testing scan ingestion
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
@@ -86,8 +87,36 @@ def override_get_db():
     finally:
         db.close()
 
+from app.core.security import get_password_hash
+from app.models.enums import UserRole
+from app.models.user import User
+
+
+def _ensure_test_user() -> User:
+    db = TestingSessionLocal()
+    try:
+        user = db.query(User).filter(User.username == "senior_test").first()
+        if user is None:
+            user = User(
+                username="senior_test",
+                email="senior_test@example.gov.in",
+                hashed_password=get_password_hash("Secret#123"),
+                full_name="Senior Test",
+                role=UserRole.SENIOR_LMO,
+                district="Chennai",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        db.expunge(user)
+        return user
+    finally:
+        db.close()
+
+
 def override_get_current_user():
-    return {"id": "test-user-id", "role": "senior_lmo"}
+    return _ensure_test_user()
 
 app.dependency_overrides[get_db] = override_get_db
 app.dependency_overrides[get_current_user] = override_get_current_user
@@ -173,7 +202,9 @@ def test_scan_ingest_endpoint():
     assert "scan_id" in data
     assert data["status"] == "QUEUED"
     assert data["evidence_hash"] == expected_hash
-    assert data["image_url"].startswith("/static/uploads/")
+    # Evidence is served through the authenticated, signed /files endpoint — never a public mount.
+    assert data["image_url"].startswith("/api/v1/files/")
+    assert "sig=" in data["image_url"]
 
     # Check database persistence
     db = TestingSessionLocal()
@@ -196,7 +227,7 @@ def test_scan_ingest_endpoint():
 
 
 def test_get_scan_by_id_roundtrip():
-    dummy_img = b"test_image_bytes"
+    dummy_img = TINY_JPEG
     ts = datetime(2026, 9, 1, 8, 15, 0, tzinfo=timezone.utc)
 
     ingest_resp = client.post(
@@ -233,7 +264,7 @@ def test_get_scan_not_found():
 
 
 def test_verify_scan_hash():
-    dummy_img = b"test_image_bytes"
+    dummy_img = TINY_JPEG
     ts = datetime(2026, 9, 1, 8, 15, 0, tzinfo=timezone.utc)
     device_id = "DEVICE-BLR-01"
 

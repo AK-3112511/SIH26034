@@ -1,15 +1,17 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List, Any, Dict
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.models.enums import RuleStatus, ScanSource, ScanStatus
+from app.schemas.common import SignedFileUrl
+
 
 class ScanIngestResponse(BaseModel):
     scan_id: uuid.UUID
     status: ScanStatus
-    image_url: str
+    image_url: SignedFileUrl
     evidence_hash: str
     captured_at_utc: datetime | None = None
     created_at: datetime
@@ -44,7 +46,7 @@ class ScanDetailResponse(BaseModel):
     scan_id: uuid.UUID
     source: ScanSource
     status: ScanStatus
-    image_url: str
+    image_url: SignedFileUrl
     evidence_hash: str
     lat: float | None = None
     lng: float | None = None
@@ -54,11 +56,15 @@ class ScanDetailResponse(BaseModel):
     ruleset_version: str | None = None
     created_at: datetime
 
-    extracted_fields: List[ExtractedFieldResponse] = []
-    rule_results: List[RuleResultResponse] = []
-    # Phase 4: reviewer assignment fields
-    assigned_lmo_id: Optional[uuid.UUID] = None
-    reviewer_note: Optional[str] = None
+    extracted_fields: list[ExtractedFieldResponse] = []
+    rule_results: list[RuleResultResponse] = []
+    captured_by_id: uuid.UUID | None = None
+    assigned_lmo_id: uuid.UUID | None = None
+    reviewer_note: str | None = None
+    product_name: str | None = None
+    platform: str | None = None
+    reference_object_type: str | None = None
+    processing_error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,25 +74,24 @@ class ScanListItem(BaseModel):
     scan_id: uuid.UUID
     source: ScanSource
     status: ScanStatus
-    image_url: str
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    captured_at_utc: Optional[datetime] = None
+    image_url: SignedFileUrl
+    lat: float | None = None
+    lng: float | None = None
+    captured_at_utc: datetime | None = None
     created_at: datetime
     # Derived convenience fields populated server-side
-    product_name: Optional[str] = None   # from extracted_fields.net_quantity or brand name
-    district_label: Optional[str] = None  # from scan or user's district
+    product_name: str | None = None    # scan.product_name, else extracted brand/manufacturer
+    net_quantity: str | None = None
+    district_label: str | None = None  # from capturing officer or GPS heuristic
     # Confidence gap: max(ocr_confidence) - min(ocr_confidence) across extracted fields
-    confidence_gap: Optional[float] = None
-    age_hours: Optional[float] = None    # hours since created_at
-
-    
+    confidence_gap: float | None = None
+    age_hours: float | None = None     # hours since created_at
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ScanListResponse(BaseModel):
-    items: List[ScanListItem]
+    items: list[ScanListItem]
     total: int
     page: int
     page_size: int
@@ -96,7 +101,7 @@ class ReviewSubmitRequest(BaseModel):
     """Body for POST /scans/{scan_id}/review."""
     decision: ScanStatus           # must be PASSED or FAILED
     reviewer_note: str             # mandatory — cannot be empty
-    overridden_fields: Optional[Dict[str, str]] = None  # field_name → corrected value
+    overridden_fields: dict[str, str] | None = None  # field_name → corrected value
 
     @field_validator("reviewer_note")
     @classmethod
@@ -129,16 +134,6 @@ class DashboardStatsResponse(BaseModel):
     calibration_failed_today: int
 
 
-class IngestDerivedRequest(BaseModel):
-    """E-commerce ingestion: manual dimensions replace reference card calibration."""
-    declared_net_quantity: Optional[str] = None
-    package_height_mm: float
-    package_width_mm: float
-    package_depth_mm: Optional[float] = None
-    platform: str          # 'blinkit' | 'amazon' | 'flipkart' | 'other'
-    platform_url: Optional[str] = None
-
-
 class HashVerificationResponse(BaseModel):
     scan_id: uuid.UUID
     is_valid: bool
@@ -151,14 +146,14 @@ class AssignedScanItem(BaseModel):
     scan_id: uuid.UUID
     source: ScanSource
     status: ScanStatus
-    image_url: str
-    product_name: Optional[str] = None
-    platform: Optional[str] = None
+    image_url: SignedFileUrl
+    product_name: str | None = None
+    platform: str | None = None
     task_type: str = "field_followup"
-    assigned_at_utc: Optional[datetime] = None
-    reviewer_note: Optional[str] = None
-    instructions: Optional[str] = None
-    rule_violations: List[str] = []
+    assigned_at_utc: datetime | None = None
+    reviewer_note: str | None = None
+    instructions: str | None = None
+    rule_violations: list[str] = []
 
     model_config = ConfigDict(from_attributes=True)
 

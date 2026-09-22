@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class RuleResultSummary(BaseModel):
     rule_id: str
     status: str
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 class ScanStatusChangedPayload(BaseModel):
     scan_id: str
     new_status: str
-    rule_results: List[RuleResultSummary] = Field(default_factory=list)
-    assigned_lmo_id: Optional[str] = None
+    rule_results: list[RuleResultSummary] = Field(default_factory=list)
+    assigned_lmo_id: str | None = None
 
 
 class TaskAssignedPayload(BaseModel):
@@ -35,7 +36,7 @@ class EventItem(BaseModel):
 
 
 class PollEventsResponse(BaseModel):
-    events: List[EventItem]
+    events: list[EventItem]
     count: int
     server_time: datetime
 
@@ -44,6 +45,8 @@ class AssignTaskRequest(BaseModel):
     scan_id: uuid.UUID
     assigned_to_lmo_id: uuid.UUID
     task_type: str = "field_followup"
+    # Free-text guidance from the senior officer, shown on the field officer's task card.
+    instructions: str | None = None
 
 
 class AssignTaskResponse(BaseModel):

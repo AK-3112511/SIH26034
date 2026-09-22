@@ -36,6 +36,30 @@ DEV_USERS = [
         "role": UserRole.FIELD_LMO,
         "district": "Coimbatore",
     },
+    {
+        "username": "lmo_kavitha",
+        "email": "kavitha@legalmetrology.gov.in",
+        "password": "FieldSecret#2",
+        "full_name": "Kavitha Selvam",
+        "role": UserRole.FIELD_LMO,
+        "district": "Chennai",
+    },
+    {
+        "username": "lmo_arun",
+        "email": "arun@legalmetrology.gov.in",
+        "password": "FieldSecret#3",
+        "full_name": "Arun Prakash",
+        "role": UserRole.FIELD_LMO,
+        "district": "Madurai",
+    },
+    {
+        "username": "lmo_meena",
+        "email": "meena@legalmetrology.gov.in",
+        "password": "FieldSecret#4",
+        "full_name": "Meena Rajan",
+        "role": UserRole.FIELD_LMO,
+        "district": "Salem",
+    },
 ]
 
 
@@ -77,6 +101,9 @@ if __name__ == "__main__":
         print()
         print("Dashboard (allowed):  senior_priya / SeniorSecret#1")
         print("Dashboard (allowed):  admin_rajesh / AdminSecret#1")
-        print("Dashboard (rejected): lmo_ramesh / FieldSecret#1")
+        print("Mobile (field):       lmo_ramesh / FieldSecret#1  (Coimbatore)")
+        print("Mobile (field):       lmo_kavitha / FieldSecret#2 (Chennai)")
+        print("Mobile (field):       lmo_arun / FieldSecret#3    (Madurai)")
+        print("Mobile (field):       lmo_meena / FieldSecret#4   (Salem)")
     finally:
         session.close()
