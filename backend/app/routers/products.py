@@ -1,4 +1,4 @@
-"""§10 GET /api/v1/products/search — Digital Repository / Product Search (Phase 6.2)."""
+"""GET /api/v1/products/search — Digital Repository / Product Search."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
@@ -17,7 +17,9 @@ router = APIRouter(prefix="/products", tags=["products"])
 @router.get("/search", response_model=ProductSearchResponse)
 def search_products_endpoint(
     query: str | None = Query(
-        None, alias="q", description="Brand/manufacturer name substring (see module docstring re: barcode)"
+        None,
+        alias="q",
+        description="Substring of a manufacturer name or of a brand recorded with a scan.",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -29,6 +31,7 @@ def search_products_endpoint(
     results = [
         ProductSearchResult(
             manufacturer_name=item["manufacturer_name"],
+            product_names=item["product_names"],
             total_scans=item["total_scans"],
             passed_count=item["passed_count"],
             failed_count=item["failed_count"],

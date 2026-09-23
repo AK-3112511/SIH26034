@@ -9,9 +9,11 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
+import { ErrorBanner } from "@/app/components/ui/ErrorBanner";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
-import { useAuth } from "@/lib/auth-context";
+import { AdminGuard } from "@/app/components/ui/AdminGuard";
 import { adminAuditLogApi, type AuditLogEntry } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString("en-IN", {
@@ -48,8 +50,8 @@ function AuditLogScreen() {
       });
       setItems(data.items);
       setTotal(data.total);
-    } catch {
-      setError("Failed to load audit log. Check backend connection.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The audit record could not be loaded."));
     } finally {
       setLoading(false);
     }
@@ -110,19 +112,7 @@ function AuditLogScreen() {
         </div>
       </div>
 
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 p-3 rounded-[4px] text-sm font-body"
-          style={{
-            backgroundColor: "rgba(179,38,30,0.08)",
-            border: "1px solid rgba(179,38,30,0.3)",
-            color: "#B3261E",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      <ErrorBanner className="mb-6" message={error} />
 
       <div className="card-surface p-0 overflow-x-auto shadow-sm">
         <table className="data-table w-full" aria-label="Audit log entries">
@@ -242,30 +232,9 @@ function AuditLogScreen() {
 }
 
 export default function AdminAuditLogPage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!loading && user && user.role !== "admin") {
-      router.replace("/");
-    }
-  }, [loading, user, router]);
-
-  if (loading || !user) {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Verifying credentials…</span>
-      </div>
-    );
-  }
-
-  if (user.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Admin access required…</span>
-      </div>
-    );
-  }
-
-  return <AuditLogScreen />;
+  return (
+    <AdminGuard>
+      <AuditLogScreen />
+    </AdminGuard>
+  );
 }

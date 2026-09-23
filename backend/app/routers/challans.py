@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -37,10 +38,18 @@ FIELD_ORDER = {name: i for i, name in enumerate((
 def list_challans(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    scan_id: uuid.UUID | None = Query(
+        None, description="Return only the notice issued for this scan, if any."
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     query = db.query(Challan)
+
+    # The scan detail screen asks "has a notice already been issued?" — it must
+    # be able to find out with a read rather than by attempting to generate one.
+    if scan_id is not None:
+        query = query.filter(Challan.scan_id == scan_id)
 
     # Field LMOs only see challans for scans they captured or were assigned.
     if current_user.role == UserRole.FIELD_LMO:

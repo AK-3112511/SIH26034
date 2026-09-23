@@ -21,6 +21,8 @@ class ProductScanEntry(BaseModel):
 
 class ProductSearchResult(BaseModel):
     manufacturer_name: str
+    #: Brand names recorded against this manufacturer's scans, if any.
+    product_names: list[str] = []
     total_scans: int
     passed_count: int
     failed_count: int

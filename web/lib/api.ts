@@ -70,11 +70,26 @@ export const authApi = {
 
 // ─── Scans ────────────────────────────────────────────────────────────────────
 
+/** Every state a scan can hold; mirrors `ScanStatus` in the backend. */
+export type ScanStatus =
+  | "QUEUED"
+  | "PROCESSING"
+  | "PASSED"
+  | "FAILED"
+  | "PENDING_REVIEW"
+  | "CALIBRATION_FAILED"
+  | "LOW_CONFIDENCE_CALIBRATION"
+  | "PROCESSING_FAILED";
+
 export interface ExtractedField {
   id: string;
   field_name: string;
   raw_text: string | null;
-  bbox: { x1: number; y1: number; x2: number; y2: number } | null;
+  /**
+   * Source-image pixel coordinates. Shape varies by pipeline version —
+   * normalise with `normaliseBBox()` from `@/lib/bbox` before use.
+   */
+  bbox: unknown;
   ocr_confidence: number | null;
   semantic_confidence: number | null;
   font_height_mm: number | null;
@@ -91,7 +106,7 @@ export interface RuleResult {
 export interface ScanDetail {
   scan_id: string;
   source: "mobile" | "ecommerce";
-  status: "QUEUED" | "PASSED" | "FAILED" | "PENDING_REVIEW" | "CALIBRATION_FAILED";
+  status: ScanStatus;
   image_url: string;
   evidence_hash: string;
   lat: number | null;
@@ -103,8 +118,14 @@ export interface ScanDetail {
   created_at: string;
   extracted_fields: ExtractedField[];
   rule_results: RuleResult[];
+  captured_by_id: string | null;
   assigned_lmo_id: string | null;
   reviewer_note: string | null;
+  product_name: string | null;
+  platform: string | null;
+  reference_object_type: string | null;
+  /** Why the pipeline gave up, when status is PROCESSING_FAILED. */
+  processing_error: string | null;
 }
 
 export interface ScanListItem {
@@ -163,6 +184,7 @@ export const scansApi = {
       { headers: { "Content-Type": "multipart/form-data" } }
     ),
   assignedToMe: () => api.get<AssignedScan[]>("/scans/assigned-to-me"),
+  districts: () => api.get<string[]>("/scans/districts"),
 };
 
 // ─── Challans ─────────────────────────────────────────────────────────────────
@@ -184,8 +206,15 @@ export interface ChallanListResponse {
 }
 
 export const challansApi = {
-  list: (params: { page?: number; page_size?: number }) =>
+  list: (params: { page?: number; page_size?: number; scan_id?: string }) =>
     api.get<ChallanListResponse>("/challans/", { params }),
+  /** The notice issued for this scan, or null if none has been issued. */
+  forScan: async (scanId: string): Promise<ChallanResponse | null> => {
+    const { data } = await api.get<ChallanListResponse>("/challans/", {
+      params: { scan_id: scanId, page_size: 1 },
+    });
+    return data.items[0] ?? null;
+  },
   generate: (scan_id: string) =>
     api.post<ChallanResponse>("/challans/generate", { scan_id }),
 };
@@ -227,6 +256,8 @@ export interface ProductScanEntry {
 
 export interface ProductSearchResult {
   manufacturer_name: string;
+  /** Brand names recorded against this manufacturer, newest scans first. */
+  product_names: string[];
   total_scans: number;
   passed_count: number;
   failed_count: number;
@@ -377,7 +408,12 @@ export const eventsApi = {
     api.get<PollEventsResponse>("/events/poll", {
       params: { ...(since ? { since } : {}), limit },
     }),
-  assignTask: (payload: { scan_id: string; assigned_to_lmo_id: string; task_type?: string }) =>
+  assignTask: (payload: {
+    scan_id: string;
+    assigned_to_lmo_id: string;
+    task_type?: string;
+    instructions?: string;
+  }) =>
     api.post<{ scan_id: string; assigned_to_lmo_id: string; task_type: string; message: string }>(
       "/events/task-assigned",
       payload

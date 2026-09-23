@@ -229,3 +229,58 @@ def test_list_challans(test_db: Session):
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_list_challans_filtered_by_scan(test_db: Session):
+    """The scan detail screen must be able to ask whether a notice exists.
+
+    Without this filter the only way to find out was to POST to /generate,
+    which is a request to issue one.
+    """
+    from datetime import datetime, timezone
+
+    from app.models.challan import Challan
+
+    test_user = User(
+        id=uuid.uuid4(),
+        username="lmo4",
+        email="lmo4@test.com",
+        hashed_password="fake",
+        full_name="L4",
+        role=UserRole.SENIOR_LMO,
+        is_active=True,
+    )
+    test_db.add(test_user)
+
+    wanted_scan_id = uuid.uuid4()
+    for scan_id in (wanted_scan_id, uuid.uuid4(), uuid.uuid4()):
+        test_db.add(
+            Challan(
+                challan_id=uuid.uuid4(),
+                scan_id=scan_id,
+                lmo_id=test_user.id,
+                pdf_url="/static/fake.pdf",
+                pdf_hash="fakehash",
+                generated_at=datetime.now(timezone.utc),
+            )
+        )
+    test_db.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: test_user
+    app.dependency_overrides[get_db] = lambda: test_db
+
+    try:
+        response = client.get("/api/v1/challans/", params={"scan_id": str(wanted_scan_id)})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["items"][0]["scan_id"] == str(wanted_scan_id)
+
+        # A scan with no notice returns an empty page, not a 404.
+        empty = client.get("/api/v1/challans/", params={"scan_id": str(uuid.uuid4())})
+        assert empty.status_code == 200
+        assert empty.json()["total"] == 0
+        assert empty.json()["items"] == []
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)

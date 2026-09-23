@@ -1,0 +1,9 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    // The evidence image must be the exact bytes the hash covers, so it is a
+    // plain <img>: next/image would re-encode and resize it.
+    "@next/next/no-img-element": "off"
+  },
+  "ignorePatterns": [".next/", "node_modules/", "tsconfig.tsbuildinfo"]
+}

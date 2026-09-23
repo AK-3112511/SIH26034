@@ -8,6 +8,7 @@
 import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { apiErrorMessage } from "@/lib/errors";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
 import { ShieldCheck } from "lucide-react";
 
@@ -16,11 +17,16 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const rejected = params.get("rejected") === "1";
+  const expired = params.get("expired") === "1";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(
-    rejected ? "Dashboard access requires Senior LMO or Admin role. Field LMO accounts are mobile-only." : null
+    rejected
+      ? "Dashboard access requires Senior LMO or Admin role. Field LMO accounts are mobile-only."
+      : expired
+      ? "Your session has ended. Sign in again to continue."
+      : null
   );
   const [loading, setLoading] = useState(false);
 
@@ -42,15 +48,8 @@ function LoginForm() {
           "Dashboard access requires Senior LMO or Admin role. " +
           "Field LMO accounts are mobile-only — use the MetrologyAI mobile app."
         );
-      } else if (err && typeof err === "object" && "response" in err) {
-        const axiosErr = err as { response?: { data?: { detail?: string | unknown } } };
-        const detail = axiosErr.response?.data?.detail;
-        setError(typeof detail === "string" ? detail : "Login failed. Check your credentials.");
       } else {
-        setError(
-          "Unable to connect to the API. Confirm the backend is running on port 8000 " +
-            "(uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)."
-        );
+        setError(apiErrorMessage(err, "Sign-in failed. Check your username and password."));
       }
     } finally {
       setLoading(false);

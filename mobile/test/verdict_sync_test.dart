@@ -76,9 +76,9 @@ void main() {
             jsonEncode({
               'status': 'FAILED',
               'rule_results': [
-                {'rule_id': 'rule_6_1_e', 'status': 'FAIL', 'reason': 'MRP missing tax phrase'},
+                {'rule_id': '6.1.e', 'status': 'FAIL', 'reason': 'MRP missing tax phrase'},
                 {'rule_id': 'schedule_ii', 'status': 'FAIL', 'reason': 'Numerals below 4 mm'},
-                {'rule_id': 'rule_6_1_a', 'status': 'PASS'},
+                {'rule_id': '6.1.a', 'status': 'PASS'},
               ],
             }),
             200,
@@ -93,8 +93,8 @@ void main() {
       expect(record!.serverStatus, 'FAILED');
       expect(record.verdict, VerdictStatus.failed);
       // Only the failing rules are kept; a passing one is not a breach.
-      expect(record.ruleFailures, equals(['rule_6_1_e', 'schedule_ii']));
-      expect(record.verdictSummary, contains('rule_6_1_e'));
+      expect(record.ruleFailures, equals(['6.1.e', 'schedule_ii']));
+      expect(record.verdictSummary, contains('6.1.e'));
     });
 
     test('a PASSED verdict reads as compliant with no breaches', () async {

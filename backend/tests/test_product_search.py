@@ -290,3 +290,44 @@ def test_search_empty_db_returns_empty_results():
     data = resp.json()
     assert data["results"] == []
     assert data["total"] == 0
+
+
+def test_search_matches_the_brand_name_recorded_with_a_scan():
+    """The officer searches for what is printed largest on the packet.
+
+    Before this, the only searchable identity was the manufacturer, so a
+    search for the brand returned nothing even though the brand was stored.
+    """
+    db = TestingSessionLocal()
+    biscuit = _with_manufacturer(_make_scan(ScanStatus.FAILED, 2), "Parle Products Pvt Ltd")
+    biscuit.product_name = "Krackjack"
+    noodles = _with_manufacturer(_make_scan(ScanStatus.PASSED, 1), "ITC Limited")
+    noodles.product_name = "Sunfeast Yippee"
+    _seed(db, [biscuit, noodles])
+    db.close()
+
+    resp = client.get("/api/v1/products/search", params={"q": "krackjack"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    result = data["results"][0]
+    assert result["manufacturer_name"] == "Parle Products Pvt Ltd"
+    assert result["product_names"] == ["Krackjack"]
+
+
+def test_search_lists_every_brand_under_a_manufacturer():
+    db = TestingSessionLocal()
+    first = _with_manufacturer(_make_scan(ScanStatus.PASSED, 3), "Parle Products Pvt Ltd")
+    first.product_name = "Krackjack"
+    second = _with_manufacturer(_make_scan(ScanStatus.PASSED, 2), "Parle Products Pvt Ltd")
+    second.product_name = "Monaco"
+    third = _with_manufacturer(_make_scan(ScanStatus.PASSED, 1), "Parle Products Pvt Ltd")
+    third.product_name = None
+    _seed(db, [first, second, third])
+    db.close()
+
+    resp = client.get("/api/v1/products/search")
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["product_names"] == ["Krackjack", "Monaco"]
+    assert result["total_scans"] == 3

@@ -10,9 +10,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
+import { ErrorBanner } from "@/app/components/ui/ErrorBanner";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
-import { useAuth } from "@/lib/auth-context";
+import { AdminGuard } from "@/app/components/ui/AdminGuard";
 import { adminRulesetsApi, type RulesetVersion, type ScheduleIIBand } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
 const EMPTY_BAND: ScheduleIIBand = { max_area_cm2: 50, min_font_mm: 1.5, description: "" };
 const EMPTY_OPEN_ENDED_BAND: ScheduleIIBand = { max_area_cm2: null, min_font_mm: 6, description: "" };
@@ -43,8 +45,8 @@ function RulesetAdminScreen() {
     try {
       const { data } = await adminRulesetsApi.list();
       setVersions(data.versions);
-    } catch {
-      setError("Failed to load ruleset versions. Check backend connection.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The ruleset versions could not be loaded."));
     } finally {
       setLoading(false);
     }
@@ -61,8 +63,8 @@ function RulesetAdminScreen() {
     try {
       await adminRulesetsApi.activate(version);
       await fetchVersions();
-    } catch {
-      setError(`Failed to activate ${version}.`);
+    } catch (err) {
+      setError(apiErrorMessage(err, `${version} could not be made active.`));
     } finally {
       setBusyVersion(null);
     }
@@ -119,15 +121,8 @@ function RulesetAdminScreen() {
       resetForm();
       setShowForm(false);
       await fetchVersions();
-    } catch (err: unknown) {
-      const detail =
-        err && typeof err === "object" && "response" in err
-          ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (err as any).response?.data?.detail
-          : null;
-      setFormError(
-        typeof detail === "string" ? detail : "Failed to save ruleset version. Check the form and try again."
-      );
+    } catch (err) {
+      setFormError(apiErrorMessage(err, "The ruleset version could not be saved."));
     } finally {
       setSaving(false);
     }
@@ -172,19 +167,7 @@ function RulesetAdminScreen() {
         </div>
       )}
 
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 p-3 rounded-[4px] text-sm font-body"
-          style={{
-            backgroundColor: "rgba(179,38,30,0.08)",
-            border: "1px solid rgba(179,38,30,0.3)",
-            color: "#B3261E",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      <ErrorBanner className="mb-6" message={error} />
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-display text-lg font-semibold text-ink-900">Versions</h2>
@@ -460,30 +443,9 @@ function RulesetAdminScreen() {
 }
 
 export default function AdminRulesetsPage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!loading && user && user.role !== "admin") {
-      router.replace("/");
-    }
-  }, [loading, user, router]);
-
-  if (loading || !user) {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Verifying credentials…</span>
-      </div>
-    );
-  }
-
-  if (user.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Admin access required…</span>
-      </div>
-    );
-  }
-
-  return <RulesetAdminScreen />;
+  return (
+    <AdminGuard>
+      <RulesetAdminScreen />
+    </AdminGuard>
+  );
 }

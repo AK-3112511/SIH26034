@@ -51,8 +51,8 @@ void main() {
         tester,
         _record(
           serverStatus: 'FAILED',
-          summary: 'Failed 2 rules: rule_6_1_e, schedule_ii.',
-          failures: ['rule_6_1_e', 'schedule_ii'],
+          summary: 'Failed 2 rules: 6.1.e, schedule_ii.',
+          failures: ['6.1.e', 'schedule_ii'],
         ),
       );
 
@@ -67,6 +67,23 @@ void main() {
       );
       expect(
         find.text('Rule 7(3) / Schedule II - Minimum height of the declaration'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('still reads as law for a row written by an older build',
+        (tester) async {
+      await _pump(
+        tester,
+        _record(
+          serverStatus: 'FAILED',
+          summary: 'Failed 1 rule.',
+          failures: ['rule_6_1_e'],
+        ),
+      );
+
+      expect(
+        find.text('Rule 6(1)(e) - Retail sale price, inclusive of all taxes'),
         findsOneWidget,
       );
     });

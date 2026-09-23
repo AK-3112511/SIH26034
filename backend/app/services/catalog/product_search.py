@@ -82,7 +82,15 @@ def search_products(
 
     if query:
         needle = query.strip().lower()
-        groups = {name: scans for name, scans in groups.items() if needle in name.lower()}
+        # Match the manufacturer, or any brand name recorded against one of
+        # its scans: an officer looking for a product searches for what is
+        # printed largest on the packet, not for the company that packed it.
+        groups = {
+            name: scans
+            for name, scans in groups.items()
+            if needle in name.lower()
+            or any((s.product_name or "").lower().find(needle) >= 0 for s in scans)
+        }
 
     products: list[dict] = []
     for name, scans in groups.items():
@@ -96,9 +104,12 @@ def search_products(
 
         trend, pass_rate = _compute_trend(oldest_first)
 
+        brands = sorted({s.product_name.strip() for s in scans if s.product_name and s.product_name.strip()})
+
         products.append(
             {
                 "manufacturer_name": name,
+                "product_names": brands,
                 "total_scans": len(scans),
                 "passed_count": passed,
                 "failed_count": failed,

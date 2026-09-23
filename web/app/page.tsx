@@ -1,8 +1,10 @@
 "use client";
 /**
- * §3 Screen 2 — Overview
- * Today's counts (scanned/passed/failed/pending review) from real scan data.
- * National Heatmap (§7.1) is a real PostGIS-clustered component (Phase 6.1).
+ * Overview — what was inspected today, and where.
+ *
+ * The counts now render as skeletons on first load rather than as em-dashes,
+ * which read as "nothing was scanned today" while the request was still in
+ * flight.
  */
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
@@ -11,7 +13,9 @@ import { ArrowRight, RefreshCw } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
 import { SealBadge } from "@/app/components/SealBadge";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
+import { ErrorBanner } from "@/app/components/ui/ErrorBanner";
 import { scansApi, type DashboardStats } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
 const Heatmap = dynamic(
   () => import("@/app/components/Heatmap").then((m) => m.Heatmap),
@@ -33,11 +37,13 @@ function StatCard({
   value,
   verdict,
   href,
+  loading = false,
 }: {
   label: string;
   value: number | null;
   verdict: "PASSED" | "FAILED" | "PENDING_REVIEW" | "CALIBRATION_FAILED" | "QUEUED";
   href?: string;
+  loading?: boolean;
 }) {
   const inner = (
     <div className="card-surface flex flex-col gap-3 h-full transition-shadow hover:shadow-sm">
@@ -47,9 +53,17 @@ function StatCard({
         </span>
         <SealBadge verdict={verdict} size={24} />
       </div>
-      <p className="font-mono text-4xl font-bold text-ink-900 tabular-nums">
-        {value === null ? "—" : value.toLocaleString()}
-      </p>
+      {loading ? (
+        <div
+          className="h-10 w-20 animate-pulse rounded bg-ink-900/10"
+          role="status"
+          aria-label={`Loading ${label}`}
+        />
+      ) : (
+        <p className="font-mono text-4xl font-bold tabular-nums text-ink-900">
+          {value === null ? "—" : value.toLocaleString()}
+        </p>
+      )}
       {href && (
         <span className="flex items-center gap-1 font-body text-xs text-brass-500 font-semibold mt-auto">
           View queue <ArrowRight size={12} />
@@ -84,8 +98,8 @@ export default function OverviewPage() {
       const { data } = await scansApi.stats();
       setStats(data);
       setLastRefresh(new Date());
-    } catch {
-      setError("Failed to load dashboard statistics. Check backend connection.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "Today's counts could not be loaded."));
     } finally {
       setLoading(false);
     }
@@ -101,10 +115,10 @@ export default function OverviewPage() {
       <div className="flex items-start justify-between mb-2">
         <div>
           <h2 className="font-display text-2xl font-bold text-ink-900">
-            Enforcement Overview
+            Overview
           </h2>
           <p className="font-body text-sm text-ink-600 mt-1">
-            PCR 2011 compliance inspection summary — today&apos;s activity
+            Inspections recorded today under the Packaged Commodities Rules, 2011
           </p>
         </div>
         <button
@@ -120,54 +134,44 @@ export default function OverviewPage() {
 
       <CalibrationRuler className="mb-6" />
 
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 p-3 rounded-card text-sm font-body"
-          style={{
-            backgroundColor: "rgba(179,38,30,0.08)",
-            border: "1px solid rgba(179,38,30,0.3)",
-            color: "#B3261E",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      <ErrorBanner className="mb-6" message={error} onRetry={fetchStats} />
 
-      {/* Stat cards — §3 screen 2 counts */}
       <section aria-label="Today's inspection counts">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <StatCard
-            label="Scanned Today"
+            label="Scanned today"
             value={stats?.scanned_today ?? null}
             verdict="QUEUED"
+            loading={loading && !stats}
           />
           <StatCard
             label="Passed"
             value={stats?.passed_today ?? null}
             verdict="PASSED"
+            loading={loading && !stats}
           />
           <StatCard
             label="Failed"
             value={stats?.failed_today ?? null}
             verdict="FAILED"
+            loading={loading && !stats}
           />
           <StatCard
-            label="Pending Review"
+            label="Pending review"
             value={stats?.pending_review ?? null}
             verdict="PENDING_REVIEW"
             href="/queue"
+            loading={loading && !stats}
           />
         </div>
       </section>
 
       <CalibrationRuler className="mb-6" />
 
-      {/* §7.1 National Heatmap — server-side PostGIS-clustered points (Phase 6.1) */}
       <section aria-label="National compliance heatmap">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-display text-lg font-semibold text-ink-900">
-            National Heatmap
+            Where scans were taken
           </h3>
         </div>
         <div className="card-surface p-0 overflow-hidden">
@@ -182,14 +186,14 @@ export default function OverviewPage() {
         <section aria-label="Additional statistics">
           <div className="flex items-center gap-6">
             <div>
-              <span className="form-label">Calibration Failed Today</span>
+              <span className="form-label">Calibration failed today</span>
               <p className="font-mono text-xl font-bold text-ink-900 tabular-nums">
                 {stats.calibration_failed_today}
               </p>
             </div>
             <div className="h-8 w-px bg-ink-900/10" aria-hidden />
             <div>
-              <span className="form-label">Last Refreshed</span>
+              <span className="form-label">Last refreshed</span>
               <p className="font-mono text-sm text-ink-600">
                 {lastRefresh.toLocaleTimeString("en-IN")}
               </p>

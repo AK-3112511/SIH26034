@@ -5,11 +5,9 @@
 
 /* ─── Base ────────────────────────────────────────────────────────────────── */
 @layer base {
-  :root {
-    --font-space-grotesk: "Space Grotesk", "Trebuchet MS", system-ui, sans-serif;
-    --font-inter: Inter, "Segoe UI", Roboto, Arial, sans-serif;
-    --font-ibm-plex-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
-  }
+  /* The three --font-* variables are supplied by next/font in app/layout.tsx,
+     which self-hosts the actual files. Tailwind's fontFamily tokens already
+     list platform fallbacks after each variable. */
 
   *,
   *::before,

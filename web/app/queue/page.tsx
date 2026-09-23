@@ -1,173 +1,187 @@
 "use client";
 /**
- * §3 Screen 3 — Review Queue
- * Reads real PENDING_REVIEW scans from the backend.
- * Layout and filter controls strictly per §4.2's layout sketch:
- *   Filter: [District ▾] [Confidence ▾] [Age ▾]     [Search]
- *   🖼  Parle-G 100g        Chennai, TN     2h ago   [Review]
- * One-at-a-time selection only — no bulk actions, per the doc's explicit reasoning.
+ * Review Queue — the scans waiting for a senior officer.
+ *
+ * Three things made this list hard to work with and all of them are fixed
+ * here. Every keystroke in the search box fired a request and replaced the
+ * table with a spinner, so typing a product name flashed the page repeatedly.
+ * The 15-second refresh reset its timer whenever any filter changed, and kept
+ * polling in a background tab. And the district filter offered four
+ * hard-coded names, so a scan from anywhere else could not be filtered to.
+ *
+ * New arrivals no longer reload the table underneath the officer either: an
+ * unobtrusive count appears, and they choose when to take them.
  */
-import { useCallback, useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ChevronDown,
-  ChevronUp,
-  ChevronsUpDown,
-  Search,
-  SlidersHorizontal,
-  Package,
-  AlertCircle,
-  Clock,
   ArrowRight,
+  ChevronDown,
+  ChevronsUpDown,
+  ChevronUp,
+  Clock,
+  Package,
+  RefreshCw,
+  Search,
   ShieldAlert,
+  SlidersHorizontal,
 } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
 import { SealBadge, type VerdictStatus } from "@/app/components/SealBadge";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
+import { ErrorBanner } from "@/app/components/ui/ErrorBanner";
+import { Pagination } from "@/app/components/ui/Pagination";
+import { TableState } from "@/app/components/ui/TableState";
 import { scansApi, eventsApi, type ScanListItem } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
+import { shortId, timeAgo } from "@/lib/format";
 
-type SortField = "created_at" | "confidence_gap" | "age";
+type SortField = "created_at" | "confidence_gap";
 type SortDir = "asc" | "desc";
 
-const DISTRICT_OPTIONS = [
-  { value: "", label: "All Districts" },
-  { value: "Chennai", label: "Chennai, TN" },
-  { value: "Coimbatore", label: "Coimbatore, TN" },
-  { value: "Madurai", label: "Madurai, TN" },
-  { value: "Salem", label: "Salem, TN" },
-];
-
 const CONFIDENCE_OPTIONS = [
-  { value: "all", label: "All Confidence" },
-  { value: "gap_desc", label: "Largest Gap First" },
-  { value: "gap_asc", label: "Smallest Gap First" },
-  { value: "critical", label: "Critical Gap (>30%)" },
-  { value: "moderate", label: "Moderate Gap (15–30%)" },
-  { value: "low", label: "Low Gap (<15%)" },
+  { value: "all", label: "Any confidence" },
+  { value: "gap_desc", label: "Largest gap first" },
+  { value: "gap_asc", label: "Smallest gap first" },
+  { value: "critical", label: "Critical gap (30% and over)" },
+  { value: "moderate", label: "Moderate gap (15-30%)" },
+  { value: "low", label: "Low gap (under 15%)" },
 ];
 
 const AGE_OPTIONS = [
-  { value: "newest", label: "Newest First" },
-  { value: "oldest", label: "Oldest First (>24h)" },
-  { value: "today", label: "Captured Today (<24h)" },
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "today", label: "Captured today" },
 ];
 
-function timeAgo(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  const m = Math.floor(diff / 60000);
-  const h = Math.floor(diff / 3600000);
-  if (m < 60) return `${Math.max(1, m)}m ago`;
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+const PAGE_SIZE = 20;
+const POLL_INTERVAL_MS = 15_000;
+const SEARCH_DEBOUNCE_MS = 350;
 
 export default function ReviewQueuePage() {
   const [items, setItems] = useState<ScanListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  /** First load only: a background refresh must not blank the table. */
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newCount, setNewCount] = useState(0);
 
-  // §4.2 Filter Sketch Controls: [District ▾] [Confidence ▾] [Age ▾] [Search]
   const [districtFilter, setDistrictFilter] = useState("");
+  const [districts, setDistricts] = useState<string[]>([]);
   const [confidenceOption, setConfidenceOption] = useState("all");
   const [ageOption, setAgeOption] = useState("newest");
+
+  const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Column sort state
   const [sortBy, setSortBy] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const PAGE_SIZE = 20;
+  // Debounce the search box: the officer is typing a product name, not asking
+  // for a request per character.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setSearchQuery(searchInput.trim());
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
-  // Map confidence & age options to API sort/filter params
-  const computedSortParams = useMemo(() => {
-    let apiSortBy: SortField = sortBy;
-    let apiSortDir: SortDir = sortDir;
+  useEffect(() => {
+    scansApi
+      .districts()
+      .then(({ data }) => setDistricts(data))
+      .catch(() => setDistricts([]));
+  }, []);
 
-    if (confidenceOption === "gap_desc") {
-      apiSortBy = "confidence_gap";
-      apiSortDir = "desc";
-    } else if (confidenceOption === "gap_asc") {
-      apiSortBy = "confidence_gap";
-      apiSortDir = "asc";
-    } else if (ageOption === "newest") {
-      apiSortBy = "created_at";
-      apiSortDir = "desc";
-    } else if (ageOption === "oldest") {
-      apiSortBy = "created_at";
-      apiSortDir = "asc";
-    }
-
-    return { sort_by: apiSortBy, sort_dir: apiSortDir };
+  const sortParams = useMemo(() => {
+    if (confidenceOption === "gap_desc") return { sort_by: "confidence_gap", sort_dir: "desc" };
+    if (confidenceOption === "gap_asc") return { sort_by: "confidence_gap", sort_dir: "asc" };
+    if (ageOption === "oldest") return { sort_by: "created_at", sort_dir: "asc" };
+    if (ageOption === "newest") return { sort_by: "created_at", sort_dir: "desc" };
+    return { sort_by: sortBy, sort_dir: sortDir };
   }, [confidenceOption, ageOption, sortBy, sortDir]);
 
-  const fetchQueue = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const confidence_band =
-        confidenceOption === "critical" || confidenceOption === "moderate" || confidenceOption === "low"
-          ? confidenceOption
-          : undefined;
-      const age_band =
-        ageOption === "today" ? "today" : ageOption === "oldest" ? "older" : undefined;
+  const fetchQueue = useCallback(
+    async (background = false) => {
+      if (background) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+      try {
+        const confidence_band =
+          confidenceOption === "critical" ||
+          confidenceOption === "moderate" ||
+          confidenceOption === "low"
+            ? confidenceOption
+            : undefined;
+        const age_band =
+          ageOption === "today" ? "today" : ageOption === "oldest" ? "older" : undefined;
 
-      const { data } = await scansApi.list({
-        status: "PENDING_REVIEW", // Queue focuses on PENDING_REVIEW per §3
-        district: districtFilter || undefined,
-        q: searchQuery.trim() || undefined,
-        confidence_band,
-        age_band,
-        sort_by: computedSortParams.sort_by,
-        sort_dir: computedSortParams.sort_dir,
-        page,
-        page_size: PAGE_SIZE,
-      });
+        const { data } = await scansApi.list({
+          status: "PENDING_REVIEW",
+          district: districtFilter || undefined,
+          q: searchQuery || undefined,
+          confidence_band,
+          age_band,
+          sort_by: sortParams.sort_by,
+          sort_dir: sortParams.sort_dir,
+          page,
+          page_size: PAGE_SIZE,
+        });
 
-      setItems(data.items);
-      setTotal(data.total);
-    } catch {
-      setError("Failed to load review queue from server. Please verify backend connection.");
-    } finally {
-      setLoading(false);
-    }
-  }, [districtFilter, confidenceOption, ageOption, searchQuery, computedSortParams, page]);
+        setItems(data.items);
+        setTotal(data.total);
+        setNewCount(0);
+      } catch (err) {
+        setError(apiErrorMessage(err, "The review queue could not be loaded."));
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [districtFilter, confidenceOption, ageOption, searchQuery, sortParams, page]
+  );
 
   useEffect(() => {
     fetchQueue();
   }, [fetchQueue]);
 
-  // §6.2 Real-Time Polling Layer (15s interval fallback per blueprint)
-  // Ensures new PENDING_REVIEW scans appear live without a manual refresh (§5.1).
+  // Poll for new arrivals. The interval is deliberately independent of the
+  // filter state, so changing a filter does not restart the clock; the ref
+  // keeps the latest fetch reachable without re-creating the timer.
+  const fetchRef = useRef(fetchQueue);
   useEffect(() => {
-    let lastPollTime: string = new Date().toISOString();
-    let isSubscribed = true;
-
-    const intervalId = setInterval(async () => {
-      try {
-        const res = await eventsApi.poll(lastPollTime);
-        if (!isSubscribed) return;
-
-        if (res.data && res.data.events && res.data.events.length > 0) {
-          lastPollTime = res.data.server_time || new Date().toISOString();
-          const hasStatusChange = res.data.events.some(
-            (e) => e.event_type === "scan.status_changed"
-          );
-          if (hasStatusChange) {
-            fetchQueue();
-          }
-        }
-      } catch {
-        // Background polling errors should not disrupt current UI view
-      }
-    }, 15000); // 15-second polling interval strictly per §6.2
-
-    return () => {
-      isSubscribed = false;
-      clearInterval(intervalId);
-    };
+    fetchRef.current = fetchQueue;
   }, [fetchQueue]);
+
+  useEffect(() => {
+    let since = new Date().toISOString();
+    let cancelled = false;
+
+    const tick = async () => {
+      // A hidden tab does not need to poll; it will catch up on focus.
+      if (document.visibilityState === "hidden") return;
+      try {
+        const { data } = await eventsApi.poll(since);
+        if (cancelled) return;
+        since = data.server_time || since;
+        const arrivals = data.events.filter((e) => e.event_type === "scan.status_changed").length;
+        if (arrivals > 0) setNewCount((n) => n + arrivals);
+      } catch {
+        // A failed poll is not worth an error banner; the next one may work.
+      }
+    };
+
+    const id = setInterval(tick, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, []);
 
   const handleColumnSort = (field: SortField) => {
     if (field === sortBy) {
@@ -176,381 +190,319 @@ export default function ReviewQueuePage() {
       setSortBy(field);
       setSortDir("desc");
     }
+    // A column sort is an explicit instruction: stop deferring to the presets.
+    setConfidenceOption((c) => (c === "gap_desc" || c === "gap_asc" ? "all" : c));
+    setAgeOption((a) => (a === "newest" || a === "oldest" ? "today" : a));
     setPage(1);
   };
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasFilters = Boolean(districtFilter || searchQuery || confidenceOption !== "all");
+
+  const sortIcon = (field: SortField) =>
+    sortBy === field ? (
+      sortDir === "desc" ? (
+        <ChevronDown size={13} className="text-brass-500" aria-hidden />
+      ) : (
+        <ChevronUp size={13} className="text-brass-500" aria-hidden />
+      )
+    ) : (
+      <ChevronsUpDown size={13} className="text-ink-600/40" aria-hidden />
+    );
 
   return (
     <AppShell>
-      {/* ── Page Header per §4.2 Layout Sketch ────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
+      <div className="mb-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="font-display text-2xl font-bold text-ink-900 tracking-tight">
-              Review Queue
+            <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900">
+              Review queue
             </h1>
-            <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-brass-500/10 text-brass-500 border border-brass-500/20">
-              PENDING REVIEW
-            </span>
+            {refreshing && (
+              <RefreshCw size={14} className="animate-spin text-ink-600" aria-label="Refreshing" />
+            )}
           </div>
-          <p className="font-body text-sm text-ink-600 mt-1">
-            {loading ? "Refreshing queue…" : `${total} scan${total !== 1 ? "s" : ""} requiring senior officer verification`}
+          <p className="mt-1 font-body text-sm text-ink-600">
+            {loading
+              ? "Loading…"
+              : `${total} scan${total === 1 ? "" : "s"} awaiting a senior officer`}
           </p>
         </div>
 
-        {/* Legal Invariant Tag (§3 & §4.2) */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-[4px] bg-paper-000 border border-ink-900/[0.08] text-xs font-body text-ink-600 shadow-sm">
-          <ShieldAlert size={14} className="text-brass-500 flex-shrink-0" aria-hidden />
+        <div className="flex items-center gap-2 rounded-card border border-ink-900/[0.08] bg-paper-000 px-3 py-2 font-body text-xs text-ink-600 shadow-sm">
+          <ShieldAlert size={14} className="shrink-0 text-brass-500" aria-hidden />
           <span>
-            <strong>Single Selection Only:</strong> Individual adjudication per Legal Metrology Act (no bulk actions).
+            <strong>One scan at a time.</strong> Each package is adjudicated individually.
           </span>
         </div>
       </div>
 
       <CalibrationRuler className="mb-6" />
 
-      {/* ── Filter Bar per §4.2 Layout Sketch ─────────────────────────────── */}
-      {/* Filter: [District ▾] [Confidence ▾] [Age ▾]     [Search] */}
+      {newCount > 0 && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-card border border-brass-500/30 bg-brass-500/5 p-3">
+          <p className="font-body text-xs text-ink-900">
+            {newCount} scan{newCount === 1 ? " has" : "s have"} changed status since you opened
+            this list.
+          </p>
+          <button
+            type="button"
+            onClick={() => fetchQueue(true)}
+            className="btn-secondary min-h-[36px] px-3 py-1 text-xs"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
       <div
-        className="card-surface mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4"
+        className="card-surface mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center"
         role="search"
-        aria-label="Filter review queue"
+        aria-label="Filter the review queue"
       >
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-600 uppercase tracking-wider mr-1">
+          <div className="mr-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ink-600">
             <SlidersHorizontal size={14} className="text-brass-500" aria-hidden />
-            <span>Filter:</span>
+            <span>Filter</span>
           </div>
 
-          {/* [District ▾] */}
           <div className="min-w-[150px]">
             <label htmlFor="filter-district" className="sr-only">
-              Filter by District
+              Filter by district
             </label>
-            <div className="relative">
-              <select
-                id="filter-district"
-                value={districtFilter}
-                onChange={(e) => {
-                  setDistrictFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="form-input text-xs pr-8 py-1.5 min-h-[40px] appearance-none cursor-pointer"
-              >
-                {DISTRICT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={14}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/60 pointer-events-none"
-                aria-hidden
-              />
-            </div>
+            <select
+              id="filter-district"
+              value={districtFilter}
+              onChange={(e) => {
+                setDistrictFilter(e.target.value);
+                setPage(1);
+              }}
+              className="form-input min-h-[40px] cursor-pointer py-1.5 text-xs"
+            >
+              <option value="">All districts</option>
+              {districts.map((district) => (
+                <option key={district} value={district}>
+                  {district}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* [Confidence ▾] */}
-          <div className="min-w-[170px]">
+          <div className="min-w-[180px]">
             <label htmlFor="filter-confidence" className="sr-only">
-              Sort/Filter by Confidence Gap
+              Filter by confidence gap
             </label>
-            <div className="relative">
-              <select
-                id="filter-confidence"
-                value={confidenceOption}
-                onChange={(e) => {
-                  setConfidenceOption(e.target.value);
-                  setPage(1);
-                }}
-                className="form-input text-xs pr-8 py-1.5 min-h-[40px] appearance-none cursor-pointer"
-              >
-                {CONFIDENCE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={14}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/60 pointer-events-none"
-                aria-hidden
-              />
-            </div>
+            <select
+              id="filter-confidence"
+              value={confidenceOption}
+              onChange={(e) => {
+                setConfidenceOption(e.target.value);
+                setPage(1);
+              }}
+              className="form-input min-h-[40px] cursor-pointer py-1.5 text-xs"
+            >
+              {CONFIDENCE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* [Age ▾] */}
           <div className="min-w-[160px]">
             <label htmlFor="filter-age" className="sr-only">
-              Sort by Age
+              Filter by age
             </label>
-            <div className="relative">
-              <select
-                id="filter-age"
-                value={ageOption}
-                onChange={(e) => {
-                  setAgeOption(e.target.value);
-                  setPage(1);
-                }}
-                className="form-input text-xs pr-8 py-1.5 min-h-[40px] appearance-none cursor-pointer"
-              >
-                {AGE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={14}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/60 pointer-events-none"
-                aria-hidden
-              />
-            </div>
+            <select
+              id="filter-age"
+              value={ageOption}
+              onChange={(e) => {
+                setAgeOption(e.target.value);
+                setPage(1);
+              }}
+              className="form-input min-h-[40px] cursor-pointer py-1.5 text-xs"
+            >
+              {AGE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        {/* [Search] */}
         <div className="w-full md:w-72">
           <label htmlFor="queue-search" className="sr-only">
-            Search product or scan ID
+            Search by product or scan id
           </label>
           <div className="relative">
             <Search
               size={15}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-600/60 pointer-events-none"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-600/60"
               aria-hidden
             />
             <input
               id="queue-search"
               type="search"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search product or ID…"
-              className="form-input pl-9 pr-3 py-1.5 text-xs min-h-[40px]"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search product or scan id"
+              className="form-input min-h-[40px] py-1.5 pl-9 pr-3 text-xs"
             />
           </div>
         </div>
       </div>
 
-      {/* ── Error Banner ─────────────────────────────────────────────────── */}
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 p-3 rounded-[4px] text-sm font-body flex items-center gap-2"
-          style={{
-            backgroundColor: "rgba(179,38,30,0.08)",
-            border: "1px solid rgba(179,38,30,0.3)",
-            color: "#B3261E",
-          }}
-        >
-          <AlertCircle size={16} />
-          <span>{error}</span>
-        </div>
-      )}
+      <ErrorBanner className="mb-6" message={error} onRetry={() => fetchQueue()} />
 
-      {/* ── Data Table per §4.2 Layout Sketch & §5.5 Design System ───────── */}
-      <div className="card-surface p-0 overflow-x-auto shadow-sm">
-        <table className="data-table w-full" aria-label="Scans pending review">
+      <div className="card-surface overflow-x-auto p-0 shadow-sm">
+        <table className="data-table w-full">
+          <caption className="sr-only">Scans awaiting review</caption>
           <thead>
             <tr>
-              <th className="w-12 pl-4 py-3">
-                <span className="sr-only">Seal Verdict</span>
+              <th scope="col" className="w-12 py-3 pl-4">
+                <span className="sr-only">Verdict</span>
               </th>
-              <th className="py-3 w-16 text-center">Preview</th>
-              <th className="py-3 font-semibold">Product / Scan</th>
-              <th className="py-3 font-semibold">District</th>
-              <th className="py-3 font-semibold">
+              <th scope="col" className="w-16 py-3 text-center">
+                Preview
+              </th>
+              <th scope="col" className="py-3">
+                Product
+              </th>
+              <th scope="col" className="py-3">
+                District
+              </th>
+              <th scope="col" className="py-3">
                 <button
                   type="button"
                   onClick={() => handleColumnSort("confidence_gap")}
-                  className="inline-flex items-center gap-1 font-body text-xs font-semibold uppercase tracking-wider text-ink-600 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass-500 rounded"
+                  className="inline-flex items-center gap-1 rounded font-body text-xs font-semibold uppercase tracking-wider text-ink-600 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass-500"
                 >
-                  Confidence Gap
-                  {sortBy === "confidence_gap" ? (
-                    sortDir === "desc" ? <ChevronDown size={13} className="text-brass-500" /> : <ChevronUp size={13} className="text-brass-500" />
-                  ) : (
-                    <ChevronsUpDown size={13} className="text-ink-600/40" />
-                  )}
+                  Confidence gap
+                  {sortIcon("confidence_gap")}
                 </button>
               </th>
-              <th className="py-3 font-semibold">
+              <th scope="col" className="py-3">
                 <button
                   type="button"
                   onClick={() => handleColumnSort("created_at")}
-                  className="inline-flex items-center gap-1 font-body text-xs font-semibold uppercase tracking-wider text-ink-600 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass-500 rounded"
+                  className="inline-flex items-center gap-1 rounded font-body text-xs font-semibold uppercase tracking-wider text-ink-600 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brass-500"
                 >
                   Age
-                  {sortBy === "created_at" ? (
-                    sortDir === "desc" ? <ChevronDown size={13} className="text-brass-500" /> : <ChevronUp size={13} className="text-brass-500" />
-                  ) : (
-                    <ChevronsUpDown size={13} className="text-ink-600/40" />
-                  )}
+                  {sortIcon("created_at")}
                 </button>
               </th>
-              <th className="py-3 pr-4 text-right font-semibold">Action</th>
+              <th scope="col" className="py-3 pr-4 text-right">
+                Action
+              </th>
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={7} className="py-16 text-center">
-                  <div className="flex flex-col items-center justify-center gap-2">
-                    <span className="font-mono text-sm text-ink-600 animate-pulse">
-                      Retrieving pending review scans…
-                    </span>
-                  </div>
-                </td>
-              </tr>
-            ) : items.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-16 text-center">
-                  <div className="max-w-md mx-auto">
-                    <p className="font-display text-base font-semibold text-ink-900">
-                      No scans awaiting review
-                    </p>
-                    <p className="font-body text-xs text-ink-600 mt-1">
-                      {districtFilter || searchQuery
-                        ? "No scans match the selected district or search term. Try resetting your filters."
-                        : "All scans in your district have been adjudicated. New offline syncs will populate automatically."}
-                    </p>
-                  </div>
-                </td>
-              </tr>
-            ) : (
+            <TableState
+              colSpan={7}
+              loading={loading}
+              isEmpty={items.length === 0}
+              loadingLabel="Loading the queue…"
+              emptyTitle="No scans awaiting review"
+              emptyHint={
+                hasFilters
+                  ? "Nothing matches these filters. Try clearing the search or the district."
+                  : "Every scan in your jurisdiction has been adjudicated. New captures will appear here as they sync."
+              }
+            />
+
+            {!loading &&
               items.map((item) => {
-                const gapPercent = item.confidence_gap !== null ? (item.confidence_gap * 100).toFixed(1) : null;
-                const isCriticalGap = (item.confidence_gap ?? 0) >= 0.30;
+                const gap = item.confidence_gap;
+                const isCritical = (gap ?? 0) >= 0.3;
 
                 return (
-                  <tr key={item.scan_id} className="hover:bg-ink-900/[0.03] transition-colors">
-                    {/* Seal badge (§5.1) */}
-                    <td className="pl-4 py-3 align-middle">
+                  <tr key={item.scan_id}>
+                    <td className="py-3 pl-4 align-middle">
                       <SealBadge verdict={item.status as VerdictStatus} size={24} />
                     </td>
 
-                    {/* 🖼 Thumbnail preview per §4.2 */}
-                    <td className="py-3 align-middle text-center">
-                      <div className="w-11 h-11 rounded-[4px] overflow-hidden bg-paper-100 border border-ink-900/[0.08] flex items-center justify-center relative mx-auto">
-                        {item.image_url ? (
+                    <td className="py-3 text-center align-middle">
+                      <div className="relative mx-auto flex h-11 w-11 items-center justify-center overflow-hidden rounded-card border border-ink-900/[0.08] bg-paper-100">
+                        <Package size={16} className="absolute text-ink-600/40" aria-hidden />
+                        {item.image_url && (
                           <img
                             src={item.image_url}
-                            alt={item.product_name ?? "Scan preview"}
-                            className="w-full h-full object-cover"
+                            alt=""
+                            className="relative h-full w-full object-cover"
                             onError={(e) => {
-                              // Fallback if image path not available on static host
-                              (e.currentTarget as HTMLElement).style.display = "none";
+                              e.currentTarget.style.display = "none";
                             }}
                           />
-                        ) : null}
-                        <Package size={16} className="text-ink-600/40 absolute" aria-hidden />
+                        )}
                       </div>
                     </td>
 
-                    {/* Product / Scan ID per §4.2 */}
                     <td className="py-3 align-middle">
-                      <div>
-                        <span className="font-body text-sm font-semibold text-ink-900 block leading-tight">
-                          {item.product_name ?? "Unlabeled Package Capture"}
+                      <span className="block font-body text-sm font-semibold leading-tight text-ink-900">
+                        {item.product_name ?? "Unnamed package"}
+                      </span>
+                      <span className="mt-0.5 flex items-center gap-2">
+                        <span className="font-mono text-xs text-ink-600">
+                          {shortId(item.scan_id)}
                         </span>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="font-mono text-xs text-ink-600">
-                            ID: {item.scan_id.slice(0, 8)}…
-                          </span>
-                          <span className="font-mono text-[10px] uppercase px-1.5 py-0.2 rounded bg-ink-900/5 text-ink-600">
-                            {item.source}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* District location per §4.2 */}
-                    <td className="py-3 align-middle font-body text-xs text-ink-600">
-                      <span className="font-medium text-ink-900">
-                        {item.district_label ?? (item.lat && item.lng ? `${item.lat.toFixed(2)}, ${item.lng.toFixed(2)}` : "—")}
+                        <span className="rounded bg-ink-900/5 px-1.5 py-0.5 font-mono text-[10px] uppercase text-ink-600">
+                          {item.source === "ecommerce" ? "online" : "field"}
+                        </span>
                       </span>
                     </td>
 
-                    {/* Confidence gap in IBM Plex Mono */}
+                    <td className="py-3 align-middle font-body text-xs text-ink-900">
+                      {item.district_label ?? "—"}
+                    </td>
+
                     <td className="py-3 align-middle">
-                      {gapPercent !== null ? (
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`font-mono text-xs font-semibold px-2 py-0.5 rounded ${
-                              isCriticalGap
-                                ? "text-verdict-fail bg-verdict-fail/10 border border-verdict-fail/20"
-                                : "text-ink-900 bg-ink-900/5"
-                            }`}
-                          >
-                            Δ {gapPercent}%
-                          </span>
-                        </div>
+                      {gap !== null ? (
+                        <span
+                          className={`rounded px-2 py-0.5 font-mono text-xs font-semibold ${
+                            isCritical
+                              ? "border border-verdict-fail/20 bg-verdict-fail/10 text-verdict-fail"
+                              : "bg-ink-900/5 text-ink-900"
+                          }`}
+                        >
+                          {(gap * 100).toFixed(1)}%
+                        </span>
                       ) : (
                         <span className="font-mono text-xs text-ink-600/60">—</span>
                       )}
                     </td>
 
-                    {/* Age per §4.2 (e.g. 2h ago, 5h ago, 1d ago) */}
                     <td className="py-3 align-middle font-mono text-xs text-ink-600">
-                      <div className="flex items-center gap-1">
+                      <span className="flex items-center gap-1">
                         <Clock size={12} className="text-ink-600/60" aria-hidden />
-                        <span>{timeAgo(item.created_at)}</span>
-                      </div>
+                        {timeAgo(item.created_at)}
+                      </span>
                     </td>
 
-                    {/* Action button [Review →] — Strictly one-at-a-time */}
-                    <td className="pr-4 py-3 align-middle text-right">
+                    <td className="py-3 pr-4 text-right align-middle">
                       <Link
                         href={`/queue/${item.scan_id}`}
-                        className="
-                          inline-flex items-center justify-center gap-1.5
-                          bg-ink-900 text-white font-body text-xs font-semibold
-                          px-3 py-1.5 rounded-[4px] min-h-[36px]
-                          transition-colors hover:bg-ink-600
-                          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-500
-                        "
-                        aria-label={`Review ${item.product_name ?? 'scan'} ${item.scan_id.slice(0, 8)}`}
+                        className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-card bg-ink-900 px-3 py-1.5 font-body text-xs font-semibold text-white transition-colors hover:bg-ink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-500"
+                        aria-label={`Review ${item.product_name ?? "scan"} ${shortId(item.scan_id)}`}
                       >
-                        <span>Review</span>
-                        <ArrowRight size={12} />
+                        Review
+                        <ArrowRight size={12} aria-hidden />
                       </Link>
                     </td>
                   </tr>
                 );
-              })
-            )}
+              })}
           </tbody>
         </table>
       </div>
 
-      {/* ── Pagination ────────────────────────────────────────────────────── */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4">
-          <span className="font-body text-xs text-ink-600">
-            Page {page} of {totalPages} ({total} total queued)
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1 || loading}
-              className="btn-secondary text-xs px-3 py-1 min-h-[36px]"
-            >
-              ← Previous
-            </button>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages || loading}
-              className="btn-secondary text-xs px-3 py-1 min-h-[36px]"
-            >
-              Next →
-            </button>
-          </div>
-        </div>
-      )}
+      <Pagination
+        page={page}
+        total={total}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+        busy={loading || refreshing}
+        itemLabel="scans"
+      />
     </AppShell>
   );
 }

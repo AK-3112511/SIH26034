@@ -1307,3 +1307,61 @@ The field app could not do its job and could not be trusted with evidence.
 - `Inter` and `SpaceGrotesk` are bundled as variable fonts registered without per-weight assets, so bold is synthesised. Google Fonts' static instances were not retrievable; if exact weights matter, add `Inter-SemiBold.ttf` etc. and declare them.
 - Hindi UI localisation remains out of scope.
 - Web dashboard (overlay geometry, assign modal, queue polling) untouched — Phase D.
+
+---
+
+## Log Entry #029 — Phase D: Web dashboard (correctness, shared primitives, real tests)
+
+**Date:** 2026-09-23
+**Scope:** `web/` primarily; three small read-side changes in `backend/` that the dashboard needs; one bug fix in `mobile/` found while checking rule ids.
+
+### What was wrong
+
+- **The bounding-box overlay could never have worked.** The viewer read `bbox.x1/.y1/.x2/.y2`; the pipeline stores `{x_min, y_min, x_max, y_max}`. Every coordinate resolved to `undefined`, so every box was positioned at `NaN%`. Even with the right keys, boxes were placed as a percentage of the *container* while the image inside it is `object-contain` and therefore letterboxed — they would have been offset by the letterbox margin and scaled against the wrong axis.
+- **The assignment dialog was invisible.** It was styled with `bg-surface`, `border-border` and `text-text-*`, none of which exist in this project's Tailwind config. It rendered as unstyled text over the page behind it.
+- **It could dispatch a real task to a person who does not exist.** When `/users/field-officers` failed, the catch block substituted a hard-coded officer — a name, a district and a fabricated UUID — and the reviewer could assign to it.
+- **The instructions the reviewer typed were dropped.** They were collected in state and never sent, although the backend has always accepted an `instructions` field.
+- **Irreversible actions had no confirmation.** Recording a verdict and issuing a Section 39 notice were each a single unguarded click, and the verdict select defaulted to PASSED regardless of what the engine found — a scan in breach was one careless click from being cleared.
+- **The dashboard could not tell whether a notice already existed** without POSTing to `/challans/generate`, which is a request to issue one.
+- **An expired session looked like a working one.** The stored token's `exp` was never read and the cached profile was never revalidated, so the full dashboard rendered until an action failed — typically after the officer had typed a reviewer note. A role change or deactivation never reached an open tab.
+- **The queue fought the user.** Every keystroke in the search box fired a request and replaced the table with a spinner; the 15-second refresh reset its timer on any filter change and kept polling in a hidden tab; the district filter offered four hard-coded names.
+- **Below 768px there was no navigation at all** — the links were `hidden md:flex` with nothing in their place.
+- **The typefaces were never loaded.** `--font-inter` and friends were declared as CSS fallback stacks with no font files behind them.
+- **The test suite asserted source text, not behaviour.** Regular expressions over page source; it passed while the assignment dialog was invisible and while it offered the fabricated officer.
+
+### Changes
+
+**Scan detail** — split from one 927-line component holding 22 pieces of state into an orchestrator plus `EvidenceViewer`, `RuleResultsPanel`, `ExtractedFieldsTable`, `ReviewForm` and `AssignTaskDialog`.
+
+- New `lib/bbox.ts` normalises every stored bbox shape — `{x_min…}`, `{x1…}`, `{x,y,w,h}` and the 4-element array — **matching `normalise_bbox()` in `challan_pdf.py` exactly**, so a box on screen and a box in the Section 39 notice describe the same region. Boxes are placed against the measured rendered-image rectangle (`onLoad` natural size + `ResizeObserver`), not the container. A field whose box cannot be placed is listed in the table and counted in a line under the image rather than dropped silently.
+- Assignment dialog rebuilt on real tokens; an unreachable directory now says so and offers a retry instead of inventing an officer; `instructions` are sent.
+- Verdict defaults to the engine's finding, and clearing a scan the engine found in breach says so in the confirmation. Both the verdict and the notice confirm first, naming what goes on the audit record.
+- The notice already issued is read with `challansApi.forScan()` and shown with its date and a link, in place of the issue button.
+- Submitting a review refetches in the background: the page the officer is reading is no longer blanked.
+- Statuses the UI previously had no branch for (`PROCESSING`, `LOW_CONFIDENCE_CALIBRATION`, `PROCESSING_FAILED`) are explained in plain language, with `processing_error` shown when there is one.
+
+**Session** — `readTokenExpiry`/`isTokenExpired` read the `exp` claim (for the UI only; the backend remains the authority, and an unreadable token defers to it). A timer ends the session at expiry and lands on `/login?expired=1`. On hydration the cached profile is shown immediately and then replaced by `/auth/me`, so a role change reaches an open tab; a network failure keeps the cached session rather than throwing the officer out mid-review.
+
+**Queue** — search debounced at 350 ms; `refreshing` separated from `loading` so a background refresh keeps the rows on screen; the poll interval no longer restarts on filter changes and skips hidden tabs; districts come from `GET /scans/districts`; new arrivals show an unobtrusive count with a Refresh button instead of reloading the table underneath the reviewer.
+
+**Shared primitives** (`app/components/ui/`) — `ErrorBanner` (replacing nine hand-rolled banners, three built from inline `style` objects), `Pagination` (four copies, two of which could page past the end), `TableState`, `ConfirmDialog`, `AdminGuard` (three copies, all of which redirected with no explanation). `lib/format.ts` replaces three copies of `timeAgo` that had drifted apart, and adds a clamping `shortId`. `lib/errors.ts` turns an unknown thrown value into one sentence, including the "could not reach the server" case.
+
+**Also** — `next/font` self-hosts Inter, Space Grotesk and IBM Plex Mono; a disclosure menu gives the dashboard navigation on a phone; `ComingSoon`, the unused `@tanstack/react-query` dependency and the invalid `py-0.2` classes are gone; ESLint added (`next/core-web-vitals`, clean) with `no-img-element` off and the reason recorded — the evidence image must be the exact bytes the hash covers; blueprint section numbers removed from officer-facing copy.
+
+**Backend (read-side, to support the above)** — `GET /challans/` takes an optional `scan_id`; product search matches a brand recorded on a scan as well as the manufacturer, and returns `product_names` per manufacturer.
+
+**Mobile bug found and fixed** — `kRuleLabels` was keyed on `rule_6_1_a`, but the engine emits `6.1.a`. Four of the five rules would have displayed as bare identifiers on the handset. The Phase C tests missed it because they used the same invented ids; they now use the real ones, with one case covering the legacy spelling.
+
+### Verification
+- `npx tsc --noEmit`: clean.
+- `npx next lint`: **No ESLint warnings or errors.**
+- `npm test` (Vitest + Testing Library): **45 passed**, replacing 73 regex-over-source assertions. Covers bbox normalisation and letterbox projection, token-expiry handling, the assignment dialog (opaque surface, only real officers, instructions sent, empty directory, retry), the review form (engine-led default, mandatory reason, confirmation before either irreversible action, existing notice) and the evidence viewer (no boxes before load, correct letterbox offset, unplaceable fields counted, image failure explained).
+- `npm run build`: succeeds, 12 routes.
+- `backend`: **206 passed, 1 skipped.** Two of the new backend tests were written first and caught a real gap — `product_names` was computed in the service but never passed through the router.
+- `mobile`: `flutter analyze` clean, `flutter test` **81 passed**.
+
+### Not done / deferred
+- **Nothing has been exercised against a running backend.** Every claim above rests on type checking, the linter, component tests and a production build. The dashboard has not been opened against live data; that is Phase E.
+- The bbox projection assumes the stored coordinates are in the same pixel space as the served image. If the pipeline is ever changed to process a resized copy, the scan would need to record that size.
+- `backend/tests/` still contains per-module copies of the SQLite shim in `test_challans.py` and `test_product_search.py`, despite `conftest.py` existing — a Phase A item left incomplete, untouched here.
+- `web/tsconfig.tsbuildinfo` is tracked in git and dirties every diff; it should be ignored.

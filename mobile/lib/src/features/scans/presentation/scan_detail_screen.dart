@@ -9,15 +9,33 @@ import '../services/verdict_sync_service.dart';
 
 /// Human wording for the rule ids the backend reports, so a field officer is
 /// not asked to decode "rule_6_1_e" on a phone in a shop.
+/// Keyed on the rule ids the engine actually emits ('6.1.a', not
+/// 'rule_6_1_a' — see `backend/app/services/rules/evaluators.py`).
 const Map<String, String> kRuleLabels = <String, String>{
-  'rule_6_1_a': 'Rule 6(1)(a) - Name and address of the manufacturer or packer',
-  'rule_6_1_c': 'Rule 6(1)(c) - Net quantity declaration',
-  'rule_6_1_e': 'Rule 6(1)(e) - Retail sale price, inclusive of all taxes',
-  'rule_6_1_g': 'Rule 6(1)(g) - Consumer care contact details',
+  '6.1.a': 'Rule 6(1)(a) - Name and address of the manufacturer or packer',
+  '6.1.c': 'Rule 6(1)(c) - Net quantity declaration',
+  '6.1.e': 'Rule 6(1)(e) - Retail sale price, inclusive of all taxes',
+  '6.1.g': 'Rule 6(1)(g) - Consumer care contact details',
   'schedule_ii': 'Rule 7(3) / Schedule II - Minimum height of the declaration',
 };
 
-String ruleLabel(String ruleId) => kRuleLabels[ruleId] ?? ruleId;
+/// Statute text for a rule id, falling back to the id itself.
+///
+/// Tolerates the underscored spelling ('rule_6_1_e') so a row written by an
+/// older build of the app still reads as law rather than as a key.
+String ruleLabel(String ruleId) {
+  final direct = kRuleLabels[ruleId];
+  if (direct != null) return direct;
+
+  final legacy = RegExp(r'^rule_(\d)_(\d)_([a-z])$').firstMatch(ruleId);
+  if (legacy != null) {
+    final canonical = '${legacy.group(1)}.${legacy.group(2)}.${legacy.group(3)}';
+    final label = kRuleLabels[canonical];
+    if (label != null) return label;
+  }
+
+  return ruleId;
+}
 
 /// Scan Detail for a capture taken on this device.
 ///

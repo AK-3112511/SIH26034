@@ -1,6 +1,6 @@
 "use client";
 /**
- * §7.1 National Heatmap — real PostGIS-clustered points (Phase 6.1).
+ * Where scans were taken — PostGIS-clustered points, never raw scans.
  * Client-only (leaflet needs `window`); mounted via next/dynamic with ssr:false
  * from web/app/page.tsx.
  */
@@ -9,8 +9,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMapEvents } from "react-leaflet";
 import type { LatLngBounds } from "leaflet";
 import { dashboardApi, type HeatmapCluster } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
-// §9 verdict tokens — the only saturated color against the muted basemap.
+// Verdict tokens — the only saturated colour against the muted basemap.
 const SEVERITY_COLOR: Record<HeatmapCluster["severity"], string> = {
   FAIL: "#B3261E",
   PENDING: "#B5730B",
@@ -57,22 +58,34 @@ export function Heatmap() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastViewport = useRef<{ zoom: number; bbox: string } | null>(null);
 
-  const fetchClusters = useCallback((zoom: number, bbox: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const { data } = await dashboardApi.heatmap({ zoom, bbox });
-        setClusters(data.clusters);
-      } catch {
-        setError("Failed to load heatmap clusters.");
-      } finally {
-        setLoading(false);
-      }
-    }, 300);
+  const load = useCallback(async (zoom: number, bbox: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await dashboardApi.heatmap({ zoom, bbox });
+      setClusters(data.clusters);
+    } catch (err) {
+      setError(apiErrorMessage(err, "This area could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  const fetchClusters = useCallback(
+    (zoom: number, bbox: string) => {
+      lastViewport.current = { zoom, bbox };
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => load(zoom, bbox), 300);
+    },
+    [load]
+  );
+
+  const retry = useCallback(() => {
+    const viewport = lastViewport.current;
+    if (viewport) load(viewport.zoom, viewport.bbox);
+  }, [load]);
 
   return (
     <div>
@@ -83,7 +96,7 @@ export function Heatmap() {
           style={{ height: "100%", width: "100%" }}
           aria-label="National compliance heatmap"
         >
-          {/* §9: muted, low-saturation basemap so verdict clusters are the only saturated color */}
+          {/* Muted basemap so the verdict clusters are the only saturated colour. */}
           <TileLayer
             url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors'
@@ -116,17 +129,19 @@ export function Heatmap() {
           </span>
         )}
         {error && (
-          <span
+          <div
             role="alert"
-            className="absolute top-2 right-2 z-[1000] status-chip"
-            style={{
-              color: "#B3261E",
-              borderColor: "rgba(179,38,30,0.3)",
-              background: "rgba(179,38,30,0.08)",
-            }}
+            className="absolute right-2 top-2 z-[1000] flex items-center gap-2 rounded-card border border-verdict-fail/30 bg-paper-000 px-2.5 py-1.5 shadow-sm"
           >
-            {error}
-          </span>
+            <span className="font-body text-xs text-verdict-fail">{error}</span>
+            <button
+              type="button"
+              onClick={retry}
+              className="rounded border border-verdict-fail/40 px-2 py-0.5 font-body text-xs font-semibold text-verdict-fail hover:bg-verdict-fail/10"
+            >
+              Retry
+            </button>
+          </div>
         )}
       </div>
       <div className="flex items-center gap-4 px-4 py-2 border-t border-ink-900/10">

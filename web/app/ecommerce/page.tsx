@@ -31,6 +31,7 @@ import {
 import { AppShell } from "@/app/components/AppShell";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
 import { scansApi } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
 const PLATFORM_OPTIONS = [
   { value: "Blinkit", label: "Blinkit" },
@@ -160,9 +161,8 @@ export default function EcommerceIngestionPage() {
         message: res.data.message,
         pdpArea: pdpAreaPreview ? parseFloat(pdpAreaPreview) : undefined,
       });
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(msg || "Failed to ingest e-commerce screenshot.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The listing could not be submitted for checking."));
     } finally {
       setSubmitting(false);
     }
@@ -190,7 +190,9 @@ export default function EcommerceIngestionPage() {
             E-Commerce Screenshot Ingestion
           </h1>
           <p className="font-body text-xs text-ink-600 mt-1">
-            §3.2 Manual Dimension Calibration Path — Ingest digital product listings into the standard verification pipeline.
+            Check an online product listing against the same rules as a field capture. Because
+            there is no reference card in a listing photograph, the package dimensions are
+            entered by hand instead.
           </p>
         </div>
         <span className="font-mono text-xs text-ink-600 bg-ink-900/5 px-2.5 py-1 rounded border border-ink-900/10 self-start sm:self-auto">
@@ -318,7 +320,7 @@ export default function EcommerceIngestionPage() {
               <div className="card-surface p-4 bg-paper-100/60 border border-ink-900/10 space-y-2">
                 <div className="flex items-center gap-2 text-ink-900 font-semibold text-xs uppercase tracking-wider">
                   <Info size={14} className="text-brass-500" />
-                  <span>§3.2 Manual Calibration Logic</span>
+                  <span>Manual calibration</span>
                 </div>
                 <p className="font-body text-xs text-ink-600 leading-relaxed">
                   Because digital screenshots contain no physical reference card, manual physical dimensions
@@ -405,13 +407,13 @@ export default function EcommerceIngestionPage() {
                 </div>
               </div>
 
-              {/* Physical Dimensions (§3.2 Alternate Input) */}
+              {/* Dimensions are typed in, since no reference card is present. */}
               <div className="card-surface space-y-4">
                 <div className="flex items-center justify-between border-b border-ink-900/10 pb-2">
                   <div className="flex items-center gap-2">
                     <Ruler size={16} className="text-brass-500" />
                     <h2 className="font-display font-semibold text-sm text-ink-900 uppercase tracking-wider">
-                      Physical Package Dimensions (§3.2)
+                      Physical package dimensions
                     </h2>
                   </div>
                   <span className="font-mono text-[11px] text-ink-600 bg-ink-900/5 px-2 py-0.5 rounded">

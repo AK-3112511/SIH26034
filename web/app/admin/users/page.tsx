@@ -9,9 +9,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle2, Plus, XCircle } from "lucide-react";
 import { AppShell } from "@/app/components/AppShell";
+import { ErrorBanner } from "@/app/components/ui/ErrorBanner";
 import { CalibrationRuler } from "@/app/components/CalibrationRuler";
-import { useAuth } from "@/lib/auth-context";
+import { AdminGuard } from "@/app/components/ui/AdminGuard";
 import { adminUsersApi, type UserResponse } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/errors";
 
 type Role = "field_lmo" | "senior_lmo" | "admin";
 const ROLE_OPTIONS: Role[] = ["field_lmo", "senior_lmo", "admin"];
@@ -43,8 +45,8 @@ function UserRow({
         district: district.trim() || null,
       });
       onSaved(data);
-    } catch {
-      setError("Failed to save.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The change could not be saved."));
     } finally {
       setSaving(false);
     }
@@ -56,8 +58,8 @@ function UserRow({
     try {
       const { data } = await adminUsersApi.update(user.id, { is_active: !user.is_active });
       onSaved(data);
-    } catch {
-      setError("Failed to update status.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The account status could not be changed."));
     } finally {
       setSaving(false);
     }
@@ -147,8 +149,8 @@ function UserManagementScreen() {
     try {
       const { data } = await adminUsersApi.list();
       setUsers(data.users);
-    } catch {
-      setError("Failed to load users. Check backend connection.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "The officer list could not be loaded."));
     } finally {
       setLoading(false);
     }
@@ -191,13 +193,8 @@ function UserManagementScreen() {
       resetForm();
       setShowForm(false);
       await fetchUsers();
-    } catch (err: unknown) {
-      const detail =
-        err && typeof err === "object" && "response" in err
-          ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (err as any).response?.data?.detail
-          : null;
-      setFormError(typeof detail === "string" ? detail : "Failed to create user.");
+    } catch (err) {
+      setFormError(apiErrorMessage(err, "The officer account could not be created."));
     } finally {
       setSaving(false);
     }
@@ -208,30 +205,18 @@ function UserManagementScreen() {
       <div className="flex items-start justify-between mb-2">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">
-            Admin: User Management
+            Officer accounts
           </h1>
           <p className="font-body text-sm text-ink-600 mt-1">
-            Assign field_lmo / senior_lmo / admin roles and district/zone per §12.
+            Assign roles and jurisdictions. Field officers use the handset; senior officers
+            and administrators use this dashboard.
           </p>
         </div>
       </div>
 
       <CalibrationRuler className="mb-6" />
 
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 p-3 rounded-[4px] text-sm font-body flex items-center gap-2"
-          style={{
-            backgroundColor: "rgba(179,38,30,0.08)",
-            border: "1px solid rgba(179,38,30,0.3)",
-            color: "#B3261E",
-          }}
-        >
-          <AlertCircle size={16} />
-          <span>{error}</span>
-        </div>
-      )}
+      <ErrorBanner className="mb-6" message={error} />
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-display text-lg font-semibold text-ink-900">Officers</h2>
@@ -241,7 +226,7 @@ function UserManagementScreen() {
           className="btn-secondary text-xs px-3 py-1.5 min-h-[40px] inline-flex items-center gap-1.5"
         >
           <Plus size={14} />
-          {showForm ? "Cancel" : "New User"}
+          {showForm ? "Cancel" : "Add an officer"}
         </button>
       </div>
 
@@ -407,30 +392,9 @@ function UserManagementScreen() {
 }
 
 export default function AdminUsersPage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!loading && user && user.role !== "admin") {
-      router.replace("/");
-    }
-  }, [loading, user, router]);
-
-  if (loading || !user) {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Verifying credentials…</span>
-      </div>
-    );
-  }
-
-  if (user.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
-        <span className="font-mono text-sm text-ink-600">Admin access required…</span>
-      </div>
-    );
-  }
-
-  return <UserManagementScreen />;
+  return (
+    <AdminGuard>
+      <UserManagementScreen />
+    </AdminGuard>
+  );
 }
