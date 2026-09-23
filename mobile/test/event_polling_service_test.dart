@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:mobile/src/features/auth/data/auth_service.dart';
-import 'package:mobile/src/features/auth/models/auth_models.dart';
 import 'package:mobile/src/features/notifications/models/app_event.dart';
 import 'package:mobile/src/features/notifications/services/event_polling_service.dart';
 

@@ -1,37 +1,60 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
-import '../../../core/database/database_helper.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/theme/design_tokens.dart';
-import '../../scans/models/capture_record.dart';
-import '../../scans/services/sync_worker.dart';
 import '../services/card_detector.dart';
+import '../services/location_service.dart';
+import 'review_capture_screen.dart';
 
-/// Supported package geometry types per §2 Screen 3 & §4.1
+/// The package geometry being inspected. Drives how the server dewarps the
+/// principal display panel before measuring type height.
 enum ProductType {
-  box('Box', Icons.inventory_2_outlined),
-  bottle('Bottle', Icons.local_drink_outlined),
-  manual('Manual', Icons.touch_app_outlined);
+  box('Box', 'box', Icons.inventory_2_outlined),
+  bottle('Bottle', 'bottle', Icons.local_drink_outlined),
+  other('Other', 'other', Icons.category_outlined);
 
   final String label;
+
+  /// Value sent as the `product_type` form field.
+  final String wireValue;
   final IconData icon;
-  const ProductType(this.label, this.icon);
+  const ProductType(this.label, this.wireValue, this.icon);
 }
 
-/// Capture Screen with Live Camera & On-Device Card Detection Shutter Gate
-/// Source: MetrologyAI_Mobile_Web_UX_Integration_Blueprint.md §2 (Screen 3) & §4.1
+/// The calibration reference placed beside the package.
+///
+/// Both are ISO/IEC 7810 ID-1 (85.60 x 53.98 mm), which is what makes them
+/// usable as a ruler; the distinction is recorded so the server knows which
+/// object it is looking for. This is a different question from [ProductType],
+/// and conflating the two is what previously sent "box" to the backend as the
+/// thing it should measure against.
+enum ReferenceCardType {
+  debitCard('Debit / Credit card', 'debit_card', Icons.credit_card),
+  panCard('PAN card', 'pan_card', Icons.badge_outlined);
+
+  final String label;
+  final String wireValue;
+  final IconData icon;
+  const ReferenceCardType(this.label, this.wireValue, this.icon);
+}
+
+/// Capture Screen with live camera and on-device card-detection shutter gate.
 class CaptureScreen extends StatefulWidget {
   final CardDetector? cardDetector;
   final bool forceSimulator;
+  final LocationService? locationService;
 
   const CaptureScreen({
     super.key,
     this.cardDetector,
     this.forceSimulator = false,
+    this.locationService,
   });
 
   @override
@@ -53,9 +76,14 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
   String _statusMessage = 'Searching for reference card...';
 
   ProductType _selectedProductType = ProductType.box;
-  late final CardDetector _detector;
+  ReferenceCardType _selectedCardType = ReferenceCardType.debitCard;
 
-  // Animation controller for the 150ms guide box transition (§7 Motion Spec)
+  late final CardDetector _detector;
+  late final LocationService _locationService;
+
+  LocationResult? _location;
+  bool _isLocating = false;
+
   late AnimationController _guideAnimationController;
   late Animation<Color?> _guideColorAnimation;
 
@@ -63,6 +91,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _detector = widget.cardDetector ?? CardDetector(throttleIntervalMs: 250);
+    _locationService = widget.locationService ?? LocationService();
 
     _guideAnimationController = AnimationController(
       vsync: this,
@@ -82,6 +111,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
     if (!widget.forceSimulator) {
       _initCamera();
     }
+    unawaited(_acquireLocation());
   }
 
   @override
@@ -90,6 +120,19 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
     _cameraController?.stopImageStream().catchError((_) {});
     _cameraController?.dispose();
     super.dispose();
+  }
+
+  /// A capture without a GPS fix cannot be stamped into the Section 65B hash,
+  /// so we ask for one as soon as the screen opens rather than at shutter time.
+  Future<void> _acquireLocation() async {
+    if (_isLocating) return;
+    setState(() => _isLocating = true);
+    final result = await _locationService.getCurrentLocation();
+    if (!mounted) return;
+    setState(() {
+      _location = result;
+      _isLocating = false;
+    });
   }
 
   Future<void> _initCamera() async {
@@ -117,7 +160,6 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
           _isCameraInitialized = true;
         });
 
-        // Start throttled frame streaming for on-device card detection
         await controller.startImageStream(_handleCameraFrame);
       }
     } catch (e) {
@@ -137,25 +179,23 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
 
     _isProcessingFrame = true;
 
-    try {
-      final yPlane = image.planes[0].bytes;
-      final width = image.width;
-      final height = image.height;
-
-      final result = _detector.processGrayscalePlane(
-        yPlaneBytes: yPlane,
-        width: width,
-        height: height,
-      );
-
-      if (!mounted) return;
-
-      _updateDetectionState(result);
-    } catch (e) {
-      debugPrint('Frame processing error: $e');
-    } finally {
-      _isProcessingFrame = false;
-    }
+    // Detection runs on OpenCV's native thread pool; the frame callback returns
+    // immediately so the preview keeps its frame rate.
+    unawaited(
+      _detector
+          .processGrayscalePlaneAsync(
+        yPlaneBytes: image.planes[0].bytes,
+        width: image.width,
+        height: image.height,
+      )
+          .then((result) {
+        if (mounted) _updateDetectionState(result);
+      }).catchError((Object e) {
+        debugPrint('Frame processing error: $e');
+      }).whenComplete(() {
+        _isProcessingFrame = false;
+      }),
+    );
   }
 
   void _updateDetectionState(CardDetectionResult result) {
@@ -194,8 +234,11 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
     }
   }
 
+  bool get _hasLocation => _location?.isSuccess ?? false;
+  bool get _canCapture => _isCardDetected && _hasLocation && !_isCapturing;
+
   Future<void> _handleShutter() async {
-    if (!_isCardDetected || _isCapturing) return;
+    if (!_canCapture) return;
 
     setState(() {
       _isCapturing = true;
@@ -203,8 +246,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
 
     try {
       final localId = const Uuid().v4();
-      final nowUtc = DateTime.now().toUtc().toIso8601String();
-      String? localSavedPath;
+      final nowUtc = DateTime.now().toUtc();
 
       final docsDir = await getApplicationDocumentsDirectory();
       final capturesDir = Directory(p.join(docsDir.path, 'captures'));
@@ -213,75 +255,61 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
       }
       final destinationPath = p.join(capturesDir.path, 'capture_$localId.jpg');
 
-      if (_cameraController != null && _isCameraInitialized) {
-        final capturedFile = await _cameraController!.takePicture();
-        await File(capturedFile.path).copy(destinationPath);
-        localSavedPath = destinationPath;
-      } else {
-        // Fallback synthetic photo for simulator / test execution
-        final dummyFile = File(destinationPath);
-        await dummyFile.writeAsBytes([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
-        localSavedPath = destinationPath;
+      if (_cameraController == null || !_isCameraInitialized) {
+        // No camera means no evidence. Say so instead of writing a placeholder
+        // that would later be uploaded as if it were a photograph.
+        if (!mounted) return;
+        setState(() => _isCapturing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Camera is unavailable, so no photo can be recorded.'),
+          ),
+        );
+        return;
       }
 
-      // Insert record into SQLite with PENDING_UPLOAD (§3.1)
-      final record = CaptureRecord(
-        localId: localId,
-        imagePath: localSavedPath,
-        lat: 11.0168,
-        lng: 76.9558,
-        capturedAtUtc: nowUtc,
-        referenceObjectType: _selectedProductType.name,
-        syncStatus: 'PENDING_UPLOAD',
-        retryCount: 0,
-      );
-
-      await DatabaseHelper().insertCapture(record);
-
-      // Trigger sync worker
-      unawaited(SyncWorker().syncPendingCaptures());
-      unawaited(SyncWorker().scheduleOneOffSync());
+      final capturedFile = await _cameraController!.takePicture();
+      await File(capturedFile.path).copy(destinationPath);
 
       if (!mounted) return;
+      setState(() => _isCapturing = false);
 
-      // Show confirmation feedback
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.ink900,
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: AppColors.verdictPass, size: 20),
-              const SizedBox(width: AppSpacing.space1),
-              Expanded(
-                child: Text(
-                  'Capture saved to SQLite queue (§3.1). Syncing...',
-                  style: AppTypography.xs.copyWith(color: AppColors.paper000),
-                ),
-              ),
-            ],
+      // Nothing is written to the queue until the officer confirms the shot.
+      final saved = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(
+          builder: (_) => ReviewCaptureScreen(
+            localId: localId,
+            imagePath: destinationPath,
+            capturedAtUtc: nowUtc,
+            latitude: _location!.latitude!,
+            longitude: _location!.longitude!,
+            accuracyMetres: _location!.accuracyMetres,
+            productType: _selectedProductType,
+            referenceCardType: _selectedCardType,
+            deviceId: AppConfig().deviceId,
           ),
-          duration: const Duration(seconds: 2),
         ),
       );
 
-      // Return to previous screen with capture metadata
-      Navigator.of(context).pop({
-        'localId': localId,
-        'path': localSavedPath,
-        'productType': _selectedProductType.name,
-        'cardDetected': true,
-      });
+      if (!mounted) return;
+      if (saved != null) {
+        Navigator.of(context).pop(saved);
+      }
     } catch (e) {
       debugPrint('Capture error: $e');
       if (mounted) {
         setState(() {
           _isCapturing = false;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not take the photo: $e')),
+        );
       }
     }
   }
 
-  /// Interactive helper for testing card detection in simulator / test environments
+  /// Debug-only helper for exercising the shutter gate on a desktop host.
+  /// Never compiled into a release build.
   void _simulateCardToggle() {
     final newDetection = !_isCardDetected;
     _updateDetectionState(
@@ -290,9 +318,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
         detectedAspectRatio: newDetection ? kIsoCardAspectRatio : null,
         confidence: newDetection ? 0.96 : 0.0,
         processingTimeMs: 14,
-        debugMessage: newDetection
-            ? 'Simulated Card Detected (Aspect: ${kIsoCardAspectRatio.toStringAsFixed(2)})'
-            : 'Simulated Card Removed',
+        debugMessage: newDetection ? 'Simulated card detected' : 'Simulated card removed',
       ),
     );
   }
@@ -304,25 +330,14 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
       body: SafeArea(
         child: Stack(
           children: [
-            // Layer 1: Camera Preview or Simulator Viewfinder
-            Positioned.fill(
-              child: _buildCameraPreview(),
-            ),
-
-            // Layer 2: Top App Controls (§4.1: Back + Flash)
+            Positioned.fill(child: _buildCameraPreview()),
             Positioned(
               top: AppSpacing.space2,
               left: AppConstraints.mobileScreenMargin,
               right: AppConstraints.mobileScreenMargin,
               child: _buildTopControls(),
             ),
-
-            // Layer 3: Central Reference Card Guide Box Overlay (§4.1 & §7)
-            Positioned.fill(
-              child: _buildGuideOverlay(),
-            ),
-
-            // Layer 4: Bottom Controls (Product Type Toggle + Shutter + Guide Text)
+            Positioned.fill(child: _buildGuideOverlay()),
             Positioned(
               bottom: 0,
               left: 0,
@@ -337,10 +352,16 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
 
   Widget _buildCameraPreview() {
     if (_isCameraInitialized && _cameraController != null) {
-      return CameraPreview(_cameraController!);
+      // Show the sensor frame at its true aspect ratio. Stretching it would
+      // misrepresent the geometry the officer is lining the card up against.
+      return Center(
+        child: AspectRatio(
+          aspectRatio: 1 / _cameraController!.value.aspectRatio,
+          child: CameraPreview(_cameraController!),
+        ),
+      );
     }
 
-    // Fallback Viewfinder for desktop/simulator or permission pending
     return Container(
       color: AppColors.ink900,
       child: Center(
@@ -354,34 +375,35 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
             ),
             const SizedBox(height: AppSpacing.space2),
             Text(
-              'LIVE VIEWFINDER ACTIVE',
+              'Camera unavailable',
               style: AppTypography.xs.copyWith(
                 color: AppColors.paper100.withValues(alpha: 0.6),
                 letterSpacing: 1.2,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: AppSpacing.space1),
-            // Simulator toggle button to test card detection state machine
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.brass500,
-                side: const BorderSide(color: AppColors.brass500),
-                minimumSize: const Size(180, 40),
-              ),
-              onPressed: _simulateCardToggle,
-              icon: Icon(
-                _isCardDetected ? Icons.check_circle : Icons.credit_card,
-                size: 16.0,
-              ),
-              label: Text(
-                _isCardDetected ? 'Card in Frame (Tap to remove)' : 'Simulate Reference Card',
-                style: AppTypography.xs.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.brass500,
+            if (kDebugMode) ...[
+              const SizedBox(height: AppSpacing.space1),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.brass500,
+                  side: const BorderSide(color: AppColors.brass500),
+                  minimumSize: const Size(180, 48),
+                ),
+                onPressed: _simulateCardToggle,
+                icon: Icon(
+                  _isCardDetected ? Icons.check_circle : Icons.credit_card,
+                  size: 16.0,
+                ),
+                label: Text(
+                  _isCardDetected ? 'Card in frame (tap to remove)' : 'Simulate reference card',
+                  style: AppTypography.xs.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.brass500,
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -392,14 +414,11 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        // Back Button
         IconButton(
           tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: AppColors.paper000),
           onPressed: () => Navigator.of(context).pop(),
         ),
-
-        // Telemetry Pill (Diagnostics)
         Tooltip(
           message: _statusMessage,
           child: Container(
@@ -416,7 +435,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
               ),
             ),
             child: Text(
-              'CV: ${_lastLatencyMs}ms | ${_isCardDetected ? "CARD DETECTED" : "NO CARD"}',
+              '${_lastLatencyMs}ms | ${_isCardDetected ? "CARD DETECTED" : "NO CARD"}',
               style: AppTypography.dataMono.copyWith(
                 fontSize: 11.0,
                 color: _isCardDetected ? AppColors.verdictPass : AppColors.paper000,
@@ -424,10 +443,8 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
             ),
           ),
         ),
-
-        // Flash Toggle Button (§4.1: [⚡ Flash])
         IconButton(
-          tooltip: 'Toggle Flash',
+          tooltip: 'Toggle flash',
           icon: Icon(
             _isFlashOn ? Icons.flash_on : Icons.flash_off,
             color: _isFlashOn ? AppColors.brass500 : AppColors.paper000,
@@ -449,17 +466,13 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Reference Card Guide Box (aspect ratio ~1.586 standard)
                 Container(
                   width: 220.0,
-                  height: 138.0, // 220 / 1.586 ≈ 138.7
+                  height: 138.0, // 220 / 1.586 ~= 138.7 (ISO/IEC 7810 ID-1)
                   decoration: BoxDecoration(
                     color: boxColor.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: Border.all(
-                      color: boxColor,
-                      width: 2.5,
-                    ),
+                    border: Border.all(color: boxColor, width: 2.5),
                   ),
                   child: Center(
                     child: Column(
@@ -506,7 +519,7 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
         vertical: AppSpacing.space2,
       ),
       decoration: BoxDecoration(
-        color: AppColors.ink900.withValues(alpha: 0.9),
+        color: AppColors.ink900.withValues(alpha: 0.92),
         border: Border(
           top: BorderSide(
             color: AppColors.ink600.withValues(alpha: 0.3),
@@ -517,19 +530,16 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Product Type Selector (§4.1: ( Box ) ( Bottle ) ( Manual ))
+          if (!_hasLocation) _buildLocationBanner(),
+          _buildReferenceCardSelector(),
+          const SizedBox(height: AppSpacing.space1),
           _buildProductTypeSelector(),
-
           const SizedBox(height: AppSpacing.space3),
-
-          // Shutter Button (§4.1 & §5.2: disabled until card detected, enabled with brass500)
           _buildShutterButton(),
-
           const SizedBox(height: AppSpacing.space2),
-
-          // Helper instruction (§4.1: "Place a debit/PAN card next to the product")
           Text(
-            'Place a debit/PAN card next to the product',
+            _shutterHint,
+            textAlign: TextAlign.center,
             style: AppTypography.xs.copyWith(
               color: AppColors.paper100,
               fontWeight: FontWeight.w500,
@@ -540,97 +550,219 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildProductTypeSelector() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: ProductType.values.map((type) {
-        final isSelected = _selectedProductType == type;
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space05),
-          child: ChoiceChip(
-            label: Row(
-              mainAxisSize: MainAxisSize.min,
+  String get _shutterHint {
+    if (!_hasLocation) return 'Location is required before you can capture evidence.';
+    if (!_isCardDetected) return 'Place a debit or PAN card flat beside the product.';
+    return 'Frame the declarations panel and the card together, then capture.';
+  }
+
+  Widget _buildLocationBanner() {
+    final result = _location;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.space2),
+      padding: const EdgeInsets.all(AppSpacing.space2),
+      decoration: BoxDecoration(
+        color: AppColors.verdictPending.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.verdictPending.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.location_off_outlined, color: AppColors.verdictPending, size: 20),
+          const SizedBox(width: AppSpacing.space1),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  type.icon,
-                  size: 16.0,
-                  color: isSelected ? AppColors.paper000 : AppColors.ink600,
-                ),
-                const SizedBox(width: AppSpacing.space05),
                 Text(
+                  _isLocating
+                      ? 'Getting a GPS fix...'
+                      : (result?.message ??
+                          'MetrologyAI needs your location to stamp this capture.'),
+                  style: AppTypography.xs.copyWith(color: AppColors.paper000),
+                ),
+                if (!_isLocating && result != null) ...[
+                  const SizedBox(height: AppSpacing.space05),
+                  Row(
+                    children: [
+                      if (result.isRetryable)
+                        TextButton(
+                          onPressed: _acquireLocation,
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.brass500,
+                            minimumSize: const Size(0, 36),
+                          ),
+                          child: const Text('Try again'),
+                        ),
+                      if (result.failure == LocationFailure.permissionDeniedForever)
+                        TextButton(
+                          onPressed: () => _locationService.openPermissionSettings(),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.brass500,
+                            minimumSize: const Size(0, 36),
+                          ),
+                          child: const Text('Open settings'),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReferenceCardSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'REFERENCE CARD',
+          style: AppTypography.xs.copyWith(
+            color: AppColors.paper100.withValues(alpha: 0.7),
+            letterSpacing: 1.0,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.space05),
+        Row(
+          children: ReferenceCardType.values.map((type) {
+            final isSelected = _selectedCardType == type;
+            return Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.space1),
+              child: ChoiceChip(
+                label: Text(
                   type.label,
                   style: AppTypography.xs.copyWith(
-                    color: isSelected ? AppColors.paper000 : AppColors.ink600,
+                    color: isSelected ? AppColors.paper000 : AppColors.paper100,
                     fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
-              ],
-            ),
-            selected: isSelected,
-            selectedColor: AppColors.ink600,
-            backgroundColor: AppColors.paper000.withValues(alpha: 0.1),
-            side: BorderSide(
-              color: isSelected ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.4),
-              width: 1.0,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppRadius.card),
-            ),
-            onSelected: (selected) {
-              if (selected) {
-                setState(() {
-                  _selectedProductType = type;
-                });
-              }
-            },
+                avatar: Icon(
+                  type.icon,
+                  size: 16,
+                  color: isSelected ? AppColors.paper000 : AppColors.paper100,
+                ),
+                selected: isSelected,
+                selectedColor: AppColors.ink600,
+                backgroundColor: AppColors.paper000.withValues(alpha: 0.1),
+                side: BorderSide(
+                  color: isSelected ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.4),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
+                onSelected: (selected) {
+                  if (selected) setState(() => _selectedCardType = type);
+                },
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProductTypeSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'PACKAGE SHAPE',
+          style: AppTypography.xs.copyWith(
+            color: AppColors.paper100.withValues(alpha: 0.7),
+            letterSpacing: 1.0,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
           ),
-        );
-      }).toList(),
+        ),
+        const SizedBox(height: AppSpacing.space05),
+        Row(
+          children: ProductType.values.map((type) {
+            final isSelected = _selectedProductType == type;
+            return Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.space1),
+              child: ChoiceChip(
+                label: Text(
+                  type.label,
+                  style: AppTypography.xs.copyWith(
+                    color: isSelected ? AppColors.paper000 : AppColors.paper100,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                avatar: Icon(
+                  type.icon,
+                  size: 16,
+                  color: isSelected ? AppColors.paper000 : AppColors.paper100,
+                ),
+                selected: isSelected,
+                selectedColor: AppColors.ink600,
+                backgroundColor: AppColors.paper000.withValues(alpha: 0.1),
+                side: BorderSide(
+                  color: isSelected ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.4),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
+                onSelected: (selected) {
+                  if (selected) setState(() => _selectedProductType = type);
+                },
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 
   Widget _buildShutterButton() {
-    // 48px minimum touch target height per §8 Mobile Considerations
-    return GestureDetector(
-      onTap: _isCardDetected ? _handleShutter : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: 72.0,
-        height: 72.0,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: _isCardDetected ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.4),
-            width: 3.0,
-          ),
-        ),
-        child: Center(
-          child: Container(
-            width: 56.0,
-            height: 56.0,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // §5.2: brass-500 fill for ready state, disabled grey/dark when no card
-              color: _isCardDetected
-                  ? AppColors.brass500
-                  : AppColors.ink600.withValues(alpha: 0.3),
+    return Semantics(
+      button: true,
+      enabled: _canCapture,
+      label: 'Capture evidence photo',
+      child: GestureDetector(
+        onTap: _canCapture ? _handleShutter : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 72.0,
+          height: 72.0,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _canCapture ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.4),
+              width: 3.0,
             ),
-            child: _isCapturing
-                ? const Center(
-                    child: SizedBox(
-                      width: 24.0,
-                      height: 24.0,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: AppColors.paper000,
+          ),
+          child: Center(
+            child: Container(
+              width: 56.0,
+              height: 56.0,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color:
+                    _canCapture ? AppColors.brass500 : AppColors.ink600.withValues(alpha: 0.3),
+              ),
+              child: _isCapturing
+                  ? const Center(
+                      child: SizedBox(
+                        width: 24.0,
+                        height: 24.0,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.paper000,
+                        ),
                       ),
+                    )
+                  : Icon(
+                      _canCapture ? Icons.camera_alt : Icons.lock_outline,
+                      color: _canCapture ? AppColors.paper000 : AppColors.ink600,
+                      size: 28.0,
                     ),
-                  )
-                : Icon(
-                    _isCardDetected ? Icons.camera_alt : Icons.lock_outline,
-                    color: _isCardDetected ? AppColors.paper000 : AppColors.ink600,
-                    size: 28.0,
-                  ),
+            ),
           ),
         ),
       ),

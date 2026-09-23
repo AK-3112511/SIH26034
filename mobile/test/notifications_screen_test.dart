@@ -6,13 +6,42 @@ import 'package:mobile/src/features/notifications/models/notification_item.dart'
 import 'package:mobile/src/features/notifications/presentation/notifications_screen.dart';
 import 'package:mobile/src/features/notifications/services/notification_service.dart';
 
+/// Feed fixtures. The app no longer ships seeded notifications, so a test
+/// that wants a populated feed supplies one.
+List<NotificationItem> sampleFeed() {
+  final now = DateTime.now();
+  return [
+    NotificationItem(
+      id: 'notif-001',
+      title: 'Compliance Verdict: Failed',
+      body: 'Rule 6(1)(e) net quantity font violation.',
+      category: NotificationCategory.compliance,
+      timestamp: now.subtract(const Duration(minutes: 12)),
+    ),
+    NotificationItem(
+      id: 'notif-002',
+      title: 'Sync Queue: 3 Scans Ingested',
+      body: '3 offline captures uploaded.',
+      category: NotificationCategory.syncEvent,
+      timestamp: now.subtract(const Duration(hours: 1)),
+    ),
+    NotificationItem(
+      id: 'notif-003',
+      title: 'Queue Alert: Photo Stuck',
+      body: 'A capture exceeded its upload retries.',
+      category: NotificationCategory.stuckAlert,
+      timestamp: now.subtract(const Duration(hours: 3)),
+    ),
+  ];
+}
+
 void main() {
   group('NotificationsScreen (§2 Screen 7)', () {
-    testWidgets('renders official notification feed with mock items', (tester) async {
+    testWidgets('renders official notification feed', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.lightTheme,
-          home: const NotificationsScreen(),
+          home: NotificationsScreen(initialNotifications: sampleFeed()),
         ),
       );
       await tester.pumpAndSettle();
@@ -36,7 +65,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.lightTheme,
-          home: const NotificationsScreen(),
+          home: NotificationsScreen(initialNotifications: sampleFeed()),
         ),
       );
       await tester.pumpAndSettle();
@@ -54,7 +83,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.lightTheme,
-          home: const NotificationsScreen(),
+          home: NotificationsScreen(initialNotifications: sampleFeed()),
         ),
       );
       await tester.pumpAndSettle();
@@ -66,6 +95,24 @@ void main() {
 
       // After marking all read, the action disappears
       expect(find.text('MARK ALL READ'), findsNothing);
+    });
+
+    testWidgets('a fresh install shows an empty feed, not seeded alerts', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.lightTheme,
+          home: NotificationsScreen(
+            notificationService: NotificationService.createTestInstance(
+              initialNotifications: const [],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('No Notifications'), findsOneWidget);
+      expect(find.text('Section 39 Challan Dispatched'), findsNothing);
+      expect(find.textContaining('Britannia'), findsNothing);
     });
 
     testWidgets('renders empty state when filter has no items', (tester) async {
@@ -134,7 +181,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Compliance Verdict: Failed'), findsOneWidget);
-      expect(find.textContaining('4C8E7456 confirmed FAILED'), findsOneWidget);
+      expect(find.textContaining('4C8E7456 was confirmed FAILED'), findsOneWidget);
       expect(find.textContaining('Rule 6(1)(e)'), findsOneWidget);
     });
   });

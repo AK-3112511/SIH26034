@@ -163,6 +163,104 @@ class CardDetector {
     }
   }
 
+  /// Same detection as [processGrayscalePlane], but using the `dartcv` async
+  /// entry points so the native work runs on OpenCV's thread pool instead of
+  /// blocking the UI isolate between camera frames.
+  ///
+  /// `compute()` is deliberately not used here: a native `Mat` is an FFI handle
+  /// that cannot be sent across an isolate boundary, so it would mean copying
+  /// every frame's luminance plane twice. The async bindings already hand the
+  /// work to a background thread and complete on the event loop.
+  Future<CardDetectionResult> processGrayscalePlaneAsync({
+    required Uint8List yPlaneBytes,
+    required int width,
+    required int height,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    _lastProcessedTime = DateTime.now();
+
+    cv.Mat? mat;
+    cv.Mat? blurred;
+    cv.Mat? edges;
+    try {
+      mat = cv.Mat.fromVec(
+        cv.VecU8.fromList(yPlaneBytes),
+        rows: height,
+        cols: width,
+        type: cv.MatType.CV_8UC1,
+      );
+
+      blurred = await cv.gaussianBlurAsync(mat, (5, 5), 1.5);
+      edges = await cv.cannyAsync(blurred, 50, 150);
+      final (contours, _) = await cv.findContoursAsync(
+        edges,
+        cv.RETR_EXTERNAL,
+        cv.CHAIN_APPROX_SIMPLE,
+      );
+
+      final totalArea = width * height;
+      bool cardFound = false;
+      double bestRatio = 0.0;
+      double bestConfidence = 0.0;
+
+      for (int i = 0; i < contours.length; i++) {
+        final contour = contours[i];
+        final area = await cv.contourAreaAsync(contour);
+
+        if (area < totalArea * 0.015 || area > totalArea * 0.70) {
+          continue;
+        }
+
+        final perimeter = await cv.arcLengthAsync(contour, true);
+        final approx = await cv.approxPolyDPAsync(contour, 0.03 * perimeter, true);
+
+        if (approx.length == 4 && cv.isContourConvex(approx)) {
+          final rect = await cv.boundingRectAsync(approx);
+          final w = rect.width.toDouble();
+          final h = rect.height.toDouble();
+
+          final majorAxis = w > h ? w : h;
+          final minorAxis = w > h ? h : w;
+
+          if (minorAxis > 0) {
+            final aspectRatio = majorAxis / minorAxis;
+            if (aspectRatio >= kCardAspectRatioMin && aspectRatio <= kCardAspectRatioMax) {
+              cardFound = true;
+              bestRatio = aspectRatio;
+              final diff = (aspectRatio - kIsoCardAspectRatio).abs();
+              bestConfidence = (1.0 - (diff / 0.5)).clamp(0.5, 0.99);
+              break;
+            }
+          }
+        }
+      }
+
+      stopwatch.stop();
+
+      return CardDetectionResult(
+        isDetected: cardFound,
+        detectedAspectRatio: cardFound ? bestRatio : null,
+        confidence: bestConfidence,
+        processingTimeMs: stopwatch.elapsedMilliseconds,
+        debugMessage: cardFound
+            ? 'Card detected (aspect ratio: ${bestRatio.toStringAsFixed(2)}, ${stopwatch.elapsedMilliseconds}ms)'
+            : 'No card candidate matched in frame (${stopwatch.elapsedMilliseconds}ms)',
+      );
+    } catch (e) {
+      stopwatch.stop();
+      return fallbackDetect(
+        yPlaneBytes: yPlaneBytes,
+        width: width,
+        height: height,
+        error: e.toString(),
+      );
+    } finally {
+      mat?.dispose();
+      blurred?.dispose();
+      edges?.dispose();
+    }
+  }
+
   /// Fallback pure algorithmic detector for unit tests or host mock environments
   CardDetectionResult fallbackDetect({
     required Uint8List yPlaneBytes,

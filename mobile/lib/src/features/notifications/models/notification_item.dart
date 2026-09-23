@@ -12,8 +12,18 @@ enum NotificationCategory {
   final IconData icon;
   final Color color;
   const NotificationCategory(this.label, this.icon, this.color);
+
+  static NotificationCategory fromName(String? name) {
+    return NotificationCategory.values.firstWhere(
+      (c) => c.name == name,
+      orElse: () => NotificationCategory.systemUpdate,
+    );
+  }
 }
 
+/// One entry in the in-app alerts feed, persisted in the `notifications` table
+/// so an alert raised by the headless background isolate is still there when
+/// the officer next opens the app.
 class NotificationItem {
   final String id;
   final String title;
@@ -33,51 +43,28 @@ class NotificationItem {
     this.deepLinkRoute,
   });
 
-  static List<NotificationItem> mockNotifications() {
-    final now = DateTime.now();
-    return [
-      NotificationItem(
-        id: 'notif-001',
-        title: 'Compliance Verdict: Failed',
-        body: 'Your scan at Reliance Retail (Coimbatore) was marked Failed — Rule 6(1)(e) Net Qty Font Violation (1.2mm < 3.0mm mandated).',
-        category: NotificationCategory.compliance,
-        timestamp: now.subtract(const Duration(minutes: 12)),
-        isRead: false,
-      ),
-      NotificationItem(
-        id: 'notif-002',
-        title: 'Sync Queue: 3 Scans Ingested',
-        body: '3 offline captures in your local queue synced successfully to the central repository. Section 65B hashes validated.',
-        category: NotificationCategory.syncEvent,
-        timestamp: now.subtract(const Duration(hours: 1, minutes: 4)),
-        isRead: false,
-        deepLinkRoute: '/sync-queue',
-      ),
-      NotificationItem(
-        id: 'notif-003',
-        title: 'Queue Alert: Photo Stuck',
-        body: 'Capture #LOC-88FE exceeded 10 upload retries (§3.1). Background sync suspended. Please check in Sync Queue.',
-        category: NotificationCategory.stuckAlert,
-        timestamp: now.subtract(const Duration(hours: 3)),
-        isRead: false,
-        deepLinkRoute: '/sync-queue',
-      ),
-      NotificationItem(
-        id: 'notif-004',
-        title: 'Section 39 Challan Dispatched',
-        body: 'Legal Notice & Form 4 Notice generated for Scan #4C8E7456 against Manufacturer M/s Britannia Industries.',
-        category: NotificationCategory.challanNotice,
-        timestamp: now.subtract(const Duration(days: 1)),
-        isRead: true,
-      ),
-      NotificationItem(
-        id: 'notif-005',
-        title: 'PCR 2011 Schedule II Ruleset Active',
-        body: 'MetrologyAI Engine updated ruleset version to v2.4. Effective for all Tamil Nadu field inspections.',
-        category: NotificationCategory.systemUpdate,
-        timestamp: now.subtract(const Duration(days: 2)),
-        isRead: true,
-      ),
-    ];
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'title': title,
+      'body': body,
+      'category': category.name,
+      'timestamp_utc': timestamp.toUtc().toIso8601String(),
+      'is_read': isRead ? 1 : 0,
+      'deep_link_route': deepLinkRoute,
+    };
+  }
+
+  factory NotificationItem.fromMap(Map<String, dynamic> map) {
+    return NotificationItem(
+      id: map['id'] as String,
+      title: map['title'] as String? ?? '',
+      body: map['body'] as String? ?? '',
+      category: NotificationCategory.fromName(map['category'] as String?),
+      timestamp:
+          DateTime.tryParse(map['timestamp_utc'] as String? ?? '')?.toLocal() ?? DateTime.now(),
+      isRead: (map['is_read'] as num?)?.toInt() == 1,
+      deepLinkRoute: map['deep_link_route'] as String?,
+    );
   }
 }

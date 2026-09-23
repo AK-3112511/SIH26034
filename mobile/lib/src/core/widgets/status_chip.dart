@@ -10,11 +10,16 @@ enum SyncStatus {
 }
 
 /// Status Chip (Non-Verdict States)
-/// Source: MetrologyAI_Design_System.md §5.4
 ///
 /// Used for sync/queue status only (Synced, Pending Upload, Failed).
-/// Deliberately a FLAT PILL SHAPE, distinct from the circular Seal Badge,
-/// so field officers never confuse queue status with legal compliance verdicts.
+/// Deliberately a FLAT PILL SHAPE, distinct from the circular
+/// [VerdictSealBadge], so field officers never confuse queue status with a
+/// legal compliance verdict.
+///
+/// Verdict red is reserved for [VerdictSealBadge]: an upload that failed is an
+/// inconvenience, whereas red on this screen means a product breaches PCR
+/// 2011. A failed upload is therefore amber ("needs your attention"), and a
+/// queued one is neutral.
 class StatusChip extends StatelessWidget {
   final SyncStatus status;
 
@@ -28,9 +33,9 @@ class StatusChip extends StatelessWidget {
       case SyncStatus.synced:
         return AppColors.verdictPass;
       case SyncStatus.pendingUpload:
-        return AppColors.verdictPending;
+        return AppColors.ink600;
       case SyncStatus.failed:
-        return AppColors.verdictFail;
+        return AppColors.verdictPending;
     }
   }
 
@@ -41,7 +46,7 @@ class StatusChip extends StatelessWidget {
       case SyncStatus.pendingUpload:
         return 'Pending Upload';
       case SyncStatus.failed:
-        return 'Failed';
+        return 'Upload failed';
     }
   }
 

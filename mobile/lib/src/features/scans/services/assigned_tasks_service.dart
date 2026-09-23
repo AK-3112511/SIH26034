@@ -11,6 +11,7 @@ import '../../notifications/models/app_event.dart';
 import '../../notifications/services/event_polling_service.dart';
 import '../models/assigned_task_record.dart';
 import '../models/capture_item.dart';
+import '../../../core/utils/short_id.dart';
 
 /// Coordinator service for managing assigned field tasks per §5.3.
 ///
@@ -72,13 +73,11 @@ class AssignedTasksService extends ChangeNotifier {
     final payload = event.taskAssignedPayload;
     if (payload == null) return;
 
-    final shortId = payload.scanId.length > 8
-        ? payload.scanId.substring(0, 8).toUpperCase()
-        : payload.scanId.toUpperCase();
+    final displayId = shortId(payload.scanId);
 
     final record = AssignedTaskRecord(
       scanId: payload.scanId,
-      title: 'E-Commerce Package #$shortId',
+      title: 'E-Commerce Package #$displayId',
       category: 'E-Commerce Violation Follow-up',
       platform: 'Blinkit',
       location: 'Seller Verification Premises',
@@ -86,7 +85,7 @@ class AssignedTasksService extends ChangeNotifier {
       taskType: payload.taskType,
       status: 'PENDING',
       instructions:
-          'Conduct physical on-site inspection and serve Section 39 compliance notice (§5.3).',
+          'Conduct a physical on-site inspection and serve a Section 39 compliance notice.',
     );
 
     await _dbHelper.insertAssignedTask(record);
@@ -175,12 +174,10 @@ class AssignedTasksService extends ChangeNotifier {
       parsedTime = DateTime.now();
     }
 
-    final shortId = r.scanId.length > 8
-        ? r.scanId.substring(0, 8).toUpperCase()
-        : r.scanId.toUpperCase();
+    final displayId = shortId(r.scanId);
 
     return CaptureItem(
-      id: 'TASK-$shortId',
+      id: 'TASK-$displayId',
       productName: r.title,
       category: r.category,
       timestamp: parsedTime,

@@ -28,7 +28,7 @@ void main() {
         localId: 'loc-test-100',
         imagePath: '/tmp/img1.jpg',
         capturedAtUtc: '2026-09-01T14:30:00.000Z',
-        referenceObjectType: 'box',
+        referenceObjectType: 'debit_card',
         syncStatus: 'PENDING_UPLOAD',
         retryCount: 2,
       );
@@ -56,7 +56,7 @@ void main() {
         localId: 'loc-stuck-500',
         imagePath: '/tmp/stuck_img.jpg',
         capturedAtUtc: '2026-09-01T10:00:00.000Z',
-        referenceObjectType: 'bottle',
+        referenceObjectType: 'pan_card',
         syncStatus: 'FAILED',
         retryCount: 11, // Exceeds 10 retries threshold
       );
@@ -74,7 +74,7 @@ void main() {
       // Verify Stuck card visual indicators
       expect(find.text('CAPTURE #LOC-STUC'), findsOneWidget);
       expect(find.text('STUCK (10+ RETRIES)'), findsOneWidget);
-      expect(find.textContaining('Automatic background sync suspended'), findsOneWidget);
+      expect(find.textContaining('Automatic upload has stopped'), findsOneWidget);
       expect(find.text('FORCE RETRY'), findsOneWidget);
       expect(find.text('DISCARD'), findsOneWidget);
     });
@@ -84,7 +84,7 @@ void main() {
         localId: 'loc-stuck-999',
         imagePath: '/tmp/corrupt.jpg',
         capturedAtUtc: '2026-09-01T08:00:00.000Z',
-        referenceObjectType: 'manual',
+        referenceObjectType: 'debit_card',
         syncStatus: 'FAILED',
         retryCount: 12,
       );

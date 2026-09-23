@@ -3,6 +3,7 @@
 /// Implements the two event types:
 /// 1. scan.status_changed: { scan_id, new_status, rule_results[], assigned_lmo_id }
 /// 2. task.assigned: { scan_id, assigned_to_lmo_id, task_type: 'field_followup' }
+library;
 
 class ScanStatusChangedPayload {
   final String scanId;

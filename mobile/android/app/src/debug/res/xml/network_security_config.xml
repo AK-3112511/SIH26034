@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug override: a field trial points the app at a laptop on the same Wi-Fi,
+  whose address is an arbitrary private-range IP. Listing every possible one is
+  impractical, so debug builds allow cleartext generally. This file does not
+  exist in release builds, which fall back to the HTTPS-only main config.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

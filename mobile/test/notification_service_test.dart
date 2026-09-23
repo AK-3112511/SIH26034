@@ -91,7 +91,7 @@ void main() {
       expect(service.notifications.length, equals(1));
       final notif = service.notifications.first;
       expect(notif.title, equals('New Task: Field Follow-up'));
-      expect(notif.body, contains('field verification (§5.3)'));
+      expect(notif.body, contains('field verification'));
     });
 
     test('markAllAsRead and markAsRead update unread counter accurately', () async {

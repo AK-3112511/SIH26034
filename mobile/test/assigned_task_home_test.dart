@@ -70,7 +70,7 @@ void main() {
 
       // Verify explicit badges differentiating origin (§5.3)
       expect(find.text('FIELD CAPTURE'), findsNWidgets(2));
-      expect(find.text('ASSIGNED TASK (§5.3)'), findsOneWidget);
+      expect(find.text('ASSIGNED TASK'), findsOneWidget);
       expect(find.text('BLINKIT'), findsOneWidget);
 
       // Verify assigned task follow-up note preview is visible
@@ -144,14 +144,14 @@ void main() {
       await tester.pumpAndSettle();
 
       // Verify bottom sheet appears
-      expect(find.text('Assigned Task Details (§5.3)'), findsOneWidget);
+      expect(find.text('Assigned task details'), findsOneWidget);
       expect(find.text('INSPECTION INSTRUCTIONS'), findsOneWidget);
       expect(find.text('START ON-SITE INSPECTION'), findsOneWidget);
 
       // Close bottom sheet
       await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
-      expect(find.text('Assigned Task Details (§5.3)'), findsNothing);
+      expect(find.text('Assigned task details'), findsNothing);
     });
   });
 }

@@ -27,7 +27,7 @@ class LocalNotificationService {
   static const String kComplianceChannelId = 'metrologyai_compliance_channel';
   static const String kComplianceChannelName = 'Compliance & Verdict Alerts';
   static const String kComplianceChannelDescription =
-      'Alerts when a scan verdict is confirmed or overridden by Senior LMO (§5.2)';
+      'Alerts when a senior officer confirms or overrides a scan verdict';
 
   @visibleForTesting
   void setPlugin(FlutterLocalNotificationsPlugin plugin) {

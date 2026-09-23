@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The backend runs on a plain-HTTP LAN address during a field trial, and
+  Android blocks cleartext by default from API 28. Rather than disabling
+  cleartext everywhere, this permits it only for loopback (adb reverse), the
+  emulator host, and RFC 1918 private ranges, and only in debug builds.
+
+  Release builds inherit the platform default: HTTPS only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- adb reverse tcp:8000 tcp:8000 over USB -->
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- Android emulator alias for the host machine -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

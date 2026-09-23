@@ -10,10 +10,13 @@ void main() {
           equals('metrologyai_compliance_channel'));
       expect(LocalNotificationService.kComplianceChannelName,
           equals('Compliance & Verdict Alerts'));
+      // The channel description is shown to the officer in Android settings,
+      // so it explains the alerts in plain language rather than citing a spec.
       expect(
         LocalNotificationService.kComplianceChannelDescription,
-        contains('§5.2'),
+        contains('senior officer confirms or overrides a scan verdict'),
       );
+      expect(LocalNotificationService.kComplianceChannelDescription, isNot(contains('§')));
     });
 
     test('initialize() and requestPermissions() execute safely in test environment', () async {

@@ -7,13 +7,20 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../../capture/presentation/capture_screen.dart';
 import '../../notifications/presentation/notifications_screen.dart';
+import '../../notifications/services/event_polling_service.dart';
 import '../../notifications/services/local_notification_service.dart';
 import '../../notifications/services/notification_service.dart';
+import '../../settings/presentation/settings_screen.dart';
 import '../models/capture_item.dart';
 import '../models/capture_record.dart';
 import '../services/assigned_tasks_service.dart';
 import '../services/sync_worker.dart';
+import '../services/verdict_sync_service.dart';
+import 'scan_detail_screen.dart';
 import 'sync_queue_screen.dart';
+import '../../../core/utils/short_id.dart';
+import 'widgets/capture_card.dart';
+import 'widgets/metric_card.dart';
 
 enum HomeTabFilter { all, myCaptures, assignedToMe }
 
@@ -34,14 +41,20 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late List<CaptureItem> _captures;
-  bool _showingMockData = false;
   late final SyncWorker _syncWorker;
   late final NotificationService _notificationService;
   late final AssignedTasksService _assignedTasksService;
+  late final EventPollingService _eventPolling;
+  late final VerdictSyncService _verdictSync;
   HomeTabFilter _activeFilter = HomeTabFilter.all;
   int _stuckCount = 0;
+
+  /// True when this screen owns the live services. A test that supplies
+  /// [HomeScreen.initialCaptures] is exercising layout, not the network, so it
+  /// gets no timers.
+  bool get _isLive => widget.initialCaptures == null;
 
   @override
   void initState() {
@@ -53,15 +66,42 @@ class _HomeScreenState extends State<HomeScreen> {
     _notificationService.addListener(_onNotificationUpdate);
     _assignedTasksService = AssignedTasksService();
     _assignedTasksService.addListener(_onAssignedTasksUpdate);
+    _eventPolling = EventPollingService();
+    _verdictSync = VerdictSyncService();
+    _verdictSync.addListener(_onVerdictUpdate);
 
     // Request Android 13+ runtime POST_NOTIFICATIONS permission
     LocalNotificationService().requestPermissions();
 
-    if (widget.initialCaptures == null) {
+    if (_isLive) {
+      WidgetsBinding.instance.addObserver(this);
       _loadCapturesFromDb();
       _assignedTasksService.loadLocalTasks();
       _assignedTasksService.syncRemoteTasks();
+      // Verdicts and dashboard events only reach the officer if something
+      // asks for them; nothing pushed to this app before.
+      _eventPolling.startPolling();
+      _verdictSync.start();
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_isLive) return;
+    if (state == AppLifecycleState.resumed) {
+      _eventPolling.startPolling();
+      _verdictSync.start();
+      _loadCapturesFromDb();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      // WorkManager covers the background case; foreground timers would only
+      // drain the battery.
+      _eventPolling.stopPolling();
+      _verdictSync.stop();
+    }
+  }
+
+  void _onVerdictUpdate() {
+    if (mounted) _loadCapturesFromDb();
   }
 
   @override
@@ -69,6 +109,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _syncWorker.removeListener(_onSyncWorkerUpdate);
     _notificationService.removeListener(_onNotificationUpdate);
     _assignedTasksService.removeListener(_onAssignedTasksUpdate);
+    _verdictSync.removeListener(_onVerdictUpdate);
+    if (_isLive) {
+      WidgetsBinding.instance.removeObserver(this);
+      _eventPolling.stopPolling();
+      _verdictSync.stop();
+    }
     super.dispose();
   }
 
@@ -81,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSyncWorkerUpdate() {
-    if (!_showingMockData && mounted) {
+    if (_isLive && mounted) {
       _loadCapturesFromDb();
     }
   }
@@ -128,47 +174,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final idDisplay = r.serverScanId != null && r.serverScanId!.isNotEmpty
-        ? 'SCAN-${r.serverScanId!.substring(0, 8).toUpperCase()}'
-        : 'LOC-${r.localId.substring(0, 8).toUpperCase()}';
+        ? 'SCAN-${shortId(r.serverScanId)}'
+        : 'LOC-${shortId(r.localId)}';
 
     final locationDisplay = r.lat != null && r.lng != null
         ? 'GPS: ${r.lat!.toStringAsFixed(4)}, ${r.lng!.toStringAsFixed(4)}'
         : 'Active Field Inspection Site';
 
+    final shape = r.productType.isEmpty
+        ? 'Package'
+        : '${r.productType[0].toUpperCase()}${r.productType.substring(1)}';
+
     return CaptureItem(
       id: idDisplay,
-      productName: 'Field Inspection Item (${r.referenceObjectType.toUpperCase()})',
-      category: '${r.referenceObjectType.toUpperCase()} Package',
+      localId: r.localId,
+      productName: (r.productName != null && r.productName!.trim().isNotEmpty)
+          ? r.productName!.trim()
+          : 'Unnamed package',
+      category: '$shape - measured against ${r.referenceObjectType.replaceAll('_', ' ')}',
       timestamp: parsedTime,
       location: locationDisplay,
       syncStatus: r.toUiSyncStatus,
+      verdict: r.verdict,
     );
   }
 
-  void _toggleDataMode() {
-    setState(() {
-      _showingMockData = !_showingMockData;
-      if (_showingMockData) {
-        _captures = CaptureItem.mockItems();
-      } else {
-        if (widget.initialCaptures != null) {
-          _captures = List.from(widget.initialCaptures!);
-        } else {
-          _captures = [];
-          _loadCapturesFromDb();
-        }
-      }
-    });
-  }
-
   List<CaptureItem> get _allItems {
-    if (_showingMockData) {
-      return [...CaptureItem.mockItems(), ...CaptureItem.mockAssignedTasks()];
-    }
     if (widget.initialCaptures != null) {
       return _captures;
     }
     return [..._captures, ..._assignedTasksService.assignedItems];
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
   }
 
   List<CaptureItem> get _displayedItems {
@@ -181,6 +222,23 @@ class _HomeScreenState extends State<HomeScreen> {
       case HomeTabFilter.all:
         return all;
     }
+  }
+
+  /// Own captures open the verdict screen; assigned tasks have no local row,
+  /// so they keep the summary sheet.
+  void _openCapture(CaptureItem item) {
+    final localId = item.localId;
+    if (localId == null) {
+      _showItemDetails(item);
+      return;
+    }
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(builder: (_) => ScanDetailScreen(localId: localId)),
+        )
+        .then((_) {
+      if (_isLive && mounted) _loadCapturesFromDb();
+    });
   }
 
   void _showItemDetails(CaptureItem item) {
@@ -203,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       item.isAssignedTask
-                          ? 'Assigned Task Details (§5.3)'
+                          ? 'Assigned task details'
                           : 'Field Capture Details',
                       style: AppTypography.base.copyWith(fontWeight: FontWeight.bold),
                     ),
@@ -421,20 +479,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
-                          // Toggle button to preview mock data vs empty state
-                          OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(80, 36),
-                              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space1),
-                            ),
-                            onPressed: _toggleDataMode,
-                            child: Text(
-                              _showingMockData ? 'Empty' : 'Preview',
-                              style: AppTypography.xs.copyWith(
-                                color: AppColors.ink900,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                          IconButton(
+                            tooltip: 'Profile & settings',
+                            onPressed: _openSettings,
+                            icon: const Icon(Icons.settings_outlined, color: AppColors.ink600),
                           ),
                         ],
                       ),
@@ -493,7 +541,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: _MetricCard(
+                        child: MetricCard(
                           label: 'Synced',
                           count: syncedCount,
                           color: AppColors.verdictPass,
@@ -501,7 +549,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(width: AppSpacing.space1),
                       Expanded(
-                        child: _MetricCard(
+                        child: MetricCard(
                           label: 'Pending',
                           count: pendingCount,
                           color: AppColors.verdictPending,
@@ -510,7 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(width: AppSpacing.space1),
                       Expanded(
-                        child: _MetricCard(
+                        child: MetricCard(
                           label: 'Failed',
                           count: failedCount,
                           color: AppColors.verdictFail,
@@ -536,9 +584,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     _buildEmptyState(),
                   ] else ...[
                     ...displayed.map(
-                      (capture) => _CaptureCard(
+                      (capture) => CaptureCard(
                         capture: capture,
-                        onTap: () => _showItemDetails(capture),
+                        onTap: () => _openCapture(capture),
                       ),
                     ),
                   ],
@@ -614,7 +662,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: AppSpacing.space2),
           Text(
-            '(Tap "Preview" above to test populated captures with sync status chips)',
+            'Tap New Scan to record your first inspection of the day.',
             style: AppTypography.dataMono.copyWith(
               fontSize: 12.0,
               color: AppColors.brass500,
@@ -725,280 +773,3 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 /// Metric Counter Card
-class _MetricCard extends StatelessWidget {
-  final String label;
-  final int count;
-  final Color color;
-  final VoidCallback? onTap;
-
-  const _MetricCard({
-    required this.label,
-    required this.count,
-    required this.color,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.card),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.space1,
-          vertical: AppSpacing.space1,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.paper000,
-          borderRadius: BorderRadius.circular(AppRadius.card),
-          border: Border.all(
-            color: color.withValues(alpha: 0.4),
-            width: 1.0,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-          Text(
-            label.toUpperCase(),
-            style: AppTypography.xs.copyWith(
-              color: AppColors.ink600,
-              fontWeight: FontWeight.w600,
-              fontSize: 11.0,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.space05),
-          Text(
-            '$count',
-            style: AppTypography.dataMono.copyWith(
-              fontSize: 18.0,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-}
-
-/// Capture Item Card with Flat Pill Sync Status Chip (§5.4) & Origin Differentiation (§5.3)
-class _CaptureCard extends StatelessWidget {
-  final CaptureItem capture;
-  final VoidCallback? onTap;
-
-  const _CaptureCard({
-    required this.capture,
-    this.onTap,
-  });
-
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute IST';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppSpacing.space1),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.space2),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Origin Badge & Status Chip Header (§5.3 Distinction)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  if (capture.isAssignedTask)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                      decoration: BoxDecoration(
-                        color: AppColors.ink900,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.assignment_turned_in_outlined,
-                            color: AppColors.brass500,
-                            size: 12,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'ASSIGNED TASK (§5.3)',
-                            style: AppTypography.dataMono.copyWith(
-                              fontSize: 10,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          if (capture.platform != null && capture.platform!.isNotEmpty) ...[
-                            const SizedBox(width: 5),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: AppColors.brass500.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                              child: Text(
-                                capture.platform!.toUpperCase(),
-                                style: AppTypography.dataMono.copyWith(
-                                  fontSize: 9,
-                                  color: AppColors.brass500,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    )
-                  else
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppColors.paper100,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: AppColors.ink600.withValues(alpha: 0.3)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.camera_alt_outlined, color: AppColors.ink600, size: 11),
-                          const SizedBox(width: 4),
-                          Text(
-                            'FIELD CAPTURE',
-                            style: AppTypography.dataMono.copyWith(
-                              fontSize: 9,
-                              color: AppColors.ink600,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  // Flat Pill Sync Status Chip per §5.4
-                  StatusChip(status: capture.syncStatus),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.space1),
-
-              // Product Title & Category
-              Text(
-                capture.productName,
-                style: AppTypography.base.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.ink900,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.space05),
-              Text(
-                capture.category,
-                style: AppTypography.xs.copyWith(
-                  color: AppColors.ink600,
-                ),
-              ),
-
-              const SizedBox(height: AppSpacing.space2),
-
-              // ID & Timestamp Banner
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.space1),
-                decoration: BoxDecoration(
-                  color: AppColors.paper100,
-                  borderRadius: BorderRadius.circular(AppRadius.card),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      capture.id,
-                      style: AppTypography.dataMono.copyWith(
-                        fontSize: 12.0,
-                        color: AppColors.ink900,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      _formatTime(capture.timestamp),
-                      style: AppTypography.dataMono.copyWith(
-                        fontSize: 12.0,
-                        color: AppColors.ink600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: AppSpacing.space1),
-
-              // Location Row
-              Row(
-                children: [
-                  const Icon(
-                    Icons.location_on_outlined,
-                    color: AppColors.ink600,
-                    size: 14.0,
-                  ),
-                  const SizedBox(width: AppSpacing.space05),
-                  Expanded(
-                    child: Text(
-                      capture.location,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.xs.copyWith(
-                        color: AppColors.ink600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-
-              // Statutory Follow-up Action Notice for Assigned Tasks
-              if (capture.isAssignedTask && capture.followUpNote != null) ...[
-                const SizedBox(height: AppSpacing.space1),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.space1,
-                    vertical: AppSpacing.space05,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.verdictPending.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: Border.all(color: AppColors.verdictPending.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline, color: AppColors.verdictPending, size: 13),
-                      const SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          capture.followUpNote!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.xs.copyWith(
-                            color: AppColors.ink900,
-                            fontWeight: FontWeight.w500,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

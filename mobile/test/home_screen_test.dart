@@ -4,8 +4,46 @@ import 'package:mobile/src/core/theme/app_theme.dart';
 import 'package:mobile/src/core/widgets/calibration_tick_rule.dart';
 import 'package:mobile/src/core/widgets/status_chip.dart';
 import 'package:mobile/src/features/auth/presentation/login_screen.dart';
+import 'package:mobile/src/core/widgets/verdict_seal_badge.dart';
 import 'package:mobile/src/features/scans/models/capture_item.dart';
+import 'package:mobile/src/features/scans/models/capture_record.dart';
 import 'package:mobile/src/features/scans/presentation/home_screen.dart';
+
+/// Fixtures live in the test, not in the app: sample captures used to shipped
+/// inside `CaptureItem` and were reachable from a button in the release build.
+List<CaptureItem> sampleCaptures() {
+  final now = DateTime.now();
+  return [
+    CaptureItem(
+      id: 'SCAN-2026-0901-01',
+      localId: 'local-1',
+      productName: 'Parle-G Glucose Biscuits 100g',
+      category: 'Box - measured against debit card',
+      timestamp: now.subtract(const Duration(minutes: 18)),
+      location: 'Sri Murugan Provisions, Gandhipuram',
+      syncStatus: SyncStatus.synced,
+      verdict: VerdictStatus.passed,
+    ),
+    CaptureItem(
+      id: 'SCAN-2026-0901-02',
+      localId: 'local-2',
+      productName: 'Amul Pasteurised Butter 500g',
+      category: 'Box - measured against debit card',
+      timestamp: now.subtract(const Duration(minutes: 42)),
+      location: 'Heritage Mart, RS Puram',
+      syncStatus: SyncStatus.pendingUpload,
+    ),
+    CaptureItem(
+      id: 'SCAN-2026-0901-03',
+      localId: 'local-3',
+      productName: 'Maggi 2-Minute Noodles 70g',
+      category: 'Other - measured against pan card',
+      timestamp: now.subtract(const Duration(hours: 1, minutes: 15)),
+      location: 'Nilgiris Supermarket, Peelamedu',
+      syncStatus: SyncStatus.failed,
+    ),
+  ];
+}
 
 void main() {
   group('HomeScreen (§2 Screen 2)', () {
@@ -42,7 +80,7 @@ void main() {
         tester.view.resetDevicePixelRatio();
       });
 
-      final mockCaptures = CaptureItem.mockItems();
+      final mockCaptures = sampleCaptures();
 
       await tester.pumpWidget(
         MaterialApp(
@@ -65,11 +103,15 @@ void main() {
       expect(find.text('SYNCED'), findsOneWidget); // in metric card
       expect(find.text('Pending Upload'), findsOneWidget); // in capture chip
       expect(find.text('PENDING'), findsOneWidget); // in metric card
-      expect(find.text('Failed'), findsOneWidget); // in capture chip
+      expect(find.text('Upload failed'), findsOneWidget); // in capture chip
       expect(find.text('FAILED'), findsOneWidget); // in metric card
+
+      // Only the row with a decided verdict shows a circular seal; sync state
+      // and legal verdict are separate signals.
+      expect(find.byType(VerdictSealBadge), findsOneWidget);
     });
 
-    testWidgets('tapping preview button toggles between mock data and empty state', (tester) async {
+    testWidgets('ships no mock-data preview toggle', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.lightTheme,
@@ -78,19 +120,12 @@ void main() {
       );
 
       expect(find.text('No Captures Recorded Today'), findsOneWidget);
-
-      // Tap Preview button
-      await tester.tap(find.text('Preview'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('No Captures Recorded Today'), findsNothing);
-      expect(find.text('Parle-G Glucose Biscuits 100g'), findsOneWidget);
-
-      // Tap Empty button
-      await tester.tap(find.text('Empty'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('No Captures Recorded Today'), findsOneWidget);
+      // The demo toggle that used to sit in the officer header is gone, and
+      // with it the fabricated captures it injected.
+      expect(find.text('Preview'), findsNothing);
+      expect(find.text('Empty'), findsNothing);
+      expect(find.text('Parle-G Glucose Biscuits 100g'), findsNothing);
+      expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
     });
 
     testWidgets('tapping logout redirects to LoginScreen', (tester) async {

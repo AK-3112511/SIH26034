@@ -1227,3 +1227,83 @@ Every scan produced the same canned "Britannia" text; the OCR engine was rebuilt
 - Mobile still cannot upload (needs bearer + real GPS) — Phase C.
 - Web overlay/queue/assign fixes — Phase D (backend contracts are now stable: boxes are `{x_min,y_min,x_max,y_max}` in original pixels).
 - Florence-2 remains opt-in (`SEMANTIC_ENGINE=florence2`); YOLO weights absent (geometric detector is primary).
+
+---
+
+## Log Entry #028 — Phase C: Mobile app (trust, evidence integrity, verdict visibility)
+
+**Date:** 2026-09-23
+**Scope:** `mobile/` only. Backend and web untouched.
+
+### What was wrong
+
+The field app could not do its job and could not be trusted with evidence.
+
+- **Anyone could sign in.** `loginOffline()` fabricated a `field_lmo` session with no password, and was offered after *any* login error — including a wrong password. Evidence captured that way is attributable to nobody.
+- **Uploads were anonymous.** The sync worker sent no bearer token, so with Phase A's authenticated ingest every upload would now 401.
+- **The evidence hash attested to fiction.** GPS was hardcoded to `(11.0168, 76.9558)` and `device_id` was regenerated per capture from a UUID slice, so the Section 65B hash bound each photo to coordinates the inspection never happened at and a device id that never recurred.
+- **The app uploaded photos that were never taken.** When the camera was unavailable the capture path wrote a 10-byte JPEG header to disk and the sync worker uploaded it — or, if the file was missing entirely, synthesised the same bytes inline.
+- **Field officers never saw a verdict.** `EventPollingService.startPolling()` was never called, `LocalNotificationService.initialize()` was never called, `loadStoredToken()` was never called, and the background isolate polled unauthenticated. Nothing read `GET /scans/{id}`.
+- **`reference_object_type` carried the wrong thing.** The capture screen sent the *package shape* (`box`/`bottle`/`manual`) in the field the pipeline uses to decide which calibration object to look for.
+- **The release build shipped demo fixtures:** a "Preview" button injecting fabricated captures, five seeded notifications naming a real manufacturer, and a "Simulate Reference Card" control.
+- **The Android build was broken.** `flutter_local_notifications` requires core library desugaring, which was never enabled — `assembleDebug` failed outright. The app had not been buildable since Phase 7.
+
+### Changes
+
+**Identity and session (`auth_service.dart`, `login_screen.dart`, `main.dart`)**
+- `loginOffline()` deleted, along with both UI entry points. Offline work now requires a session this device previously obtained with real credentials.
+- `restoreSession()` validates a stored token against `/auth/me`: accepted → online (and the server's copy of role/district/active is adopted, so a transfer made on the dashboard reaches the handset); rejected (401/403) → credentials wiped with a reason the login screen shows; unreachable → cached session kept, so a dead zone does not end a shift.
+- `handleUnauthorized()` ends the session from anywhere; a new `AuthGate` at the root listens to `AuthService` and swaps to login, so a token revoked mid-shift cannot leave an officer on a screen whose every request silently fails.
+- The offline banner is now informational and offers *Change server address* instead of a way in.
+
+**Evidence provenance (`location_service.dart`, `app_config.dart`, `capture_screen.dart`)**
+- Real GPS via `geolocator`, with each failure mode (service off / denied / denied forever / timeout) carrying its own explanation and remedy; *Open settings* for a permanent denial. **The shutter stays locked without a fix** — a capture that cannot be located is refused rather than stamped with a constant.
+- `AppConfig` persists a stable per-installation `device_id` (generated once) and the server base URL, via `shared_preferences`.
+- The camera-unavailable path no longer writes placeholder bytes; it says the camera is unavailable and records nothing.
+
+**Capture flow**
+- **Reference card** (`debit_card` / `pan_card`) and **package shape** (`box` / `bottle` / `other`) are now separate selectors sent as `reference_object_type` and `product_type`.
+- New **Review Before Upload** screen: the photo, the metadata that will be hashed, an optional brand/product name, Retake (deletes the file) or Confirm. Nothing enters the queue until the officer confirms.
+- Card detection moved off the UI isolate via `dartcv` async bindings (`processGrayscalePlaneAsync`). `compute()` was deliberately not used: a native `Mat` is an FFI handle that cannot cross an isolate boundary, so it would mean copying every frame twice.
+- Preview rendered at the sensor's true aspect ratio; the simulator control is `kDebugMode`-only.
+
+**Sync worker**
+- Sends the bearer token; aborts the run without touching the queue when signed out.
+- **Refuses to upload anything that is not a photograph** — missing file, or under 1 KB (the old placeholder). Such captures are parked past the retry budget with an explanation, visible in the Sync Queue for the officer to discard deliberately.
+- 401 mid-run ends the session and returns the capture to `PENDING_UPLOAD` rather than burning a retry on a doomed request.
+- Exponential backoff (30 s → 30 min cap) recorded as `next_attempt_at_utc` and honoured by the query, so a flapping network cannot exhaust ten retries in seconds.
+- Orphaned `UPLOADING` rows (crash / force-stop) are recovered at boot and by the background job.
+
+**Verdict visibility**
+- `VerdictSyncService` polls `GET /scans/{id}` for synced captures until terminal and writes `server_status`, a plain-language summary and the failing rule ids into the local row — so the verdict is readable offline afterwards.
+- New mobile **Scan Detail** screen: verdict seal, summary, breached rules rendered as statute text (`rule_6_1_e` → "Rule 6(1)(e) — Retail sale price, inclusive of all taxes"), and the evidence record.
+- New `VerdictSealBadge` (circular) is distinct in **shape and icon** from `StatusChip` (flat pill), not just colour. Verdict red is now reserved for compliance: a failed upload is amber and reads "Upload failed".
+
+**Real-time**
+- `EventPollingService` and `VerdictSyncService` start on Home and pause on background (`WidgetsBindingObserver`); WorkManager covers the background case.
+- The headless isolate now loads `AppConfig`, restores the token and initialises notifications before doing anything — previously it polled unauthenticated and uploaded nothing.
+- Notifications persist in a new SQLite `notifications` table with deterministic ids (`scan-<id>-<status>`), so the foreground poller and the background isolate cannot file the same alert twice. The five seeded fixtures are gone.
+- Tapping a verdict alert resolves the server scan id to the local capture and opens Scan Detail.
+
+**Schema** — `DatabaseHelper` v2 with an additive `onUpgrade` (a device holding unsynced captures upgrades without losing evidence): `accuracy_m`, `product_type`, `product_name`, `device_id`, `next_attempt_at_utc`, `last_error`, `server_status`, `verdict_summary`, `rule_failures`, plus the `notifications` table. `createSchema` is public and the SQLite tests now use it instead of hand-rolled copies, so a missed migration fails in CI rather than on a handset.
+
+**Profile & Settings** — officer identity, editable server address (validated: `192.168.1.7:8000` → `http://192.168.1.7:8000/api/v1`), Wi-Fi-only sync (re-registers the WorkManager constraint, so the switch actually changes behaviour), device id, app version, confirmed sign-out.
+
+**Build and platform**
+- **Enabled core library desugaring** (`desugar_jdk_libs:2.1.4`) — without it `assembleDebug` failed its AAR metadata check and no Android build was possible.
+- Fine/coarse location permissions; `network_security_config.xml` permitting cleartext to loopback/emulator only, with a debug-only override for LAN addresses (release builds stay HTTPS-only); app label `MetrologyAI`.
+- **Bundled the three design-system fonts.** `AppTypography` named `Inter`, `SpaceGrotesk` and `IBMPlexMono`, but no font assets existed and no `fonts:` section was declared — every style silently fell back to the platform default, so the app had never rendered in its own typefaces.
+
+**Cleanup** — `app_colors.dart` (dead duplicate) deleted; sample captures and notifications moved out of production into the tests that use them; internal spec references (`§5.2`, `§3.1`, `§5.3`) removed from officer-facing copy and the Android channel description; ten unguarded `substring(0, 8)` calls replaced with a clamping `shortId()` helper (an `ACK-…` id or a short scan id would have thrown `RangeError` in a list tile); `home_screen.dart` 1056 → 776 lines with `CaptureCard` and `MetricCard` extracted.
+
+### Verification
+- `flutter analyze`: **No issues found.**
+- `flutter test`: **80 passed** (was 50). New coverage: session restore across all four outcomes and the absence of any password-less path; base-URL normalisation; the shutter refusing to fire without a fix; the worker refusing unauthenticated, missing-file and 401 cases; backoff growth and cap; orphan recovery; verdict sync for PASSED / FAILED / CALIBRATION_FAILED / signed-out / already-terminal / never-uploaded; Scan Detail rendering.
+- `flutter build apk --debug`: **succeeds** (fonts and `network_security_config.xml` confirmed present in the APK). It failed before this phase and failed twice during it until desugaring was enabled.
+- Grep-verified absent from `lib/`: `loginOffline`, seeded fixtures, the hardcoded coordinate pair, the synthetic JPEG bytes.
+
+### Not done / deferred
+- **No on-device run.** Everything above is verified by unit/widget tests, the analyzer and a real Android build; the end-to-end path (phone on LAN → ingest → PaddleOCR → verdict → notification) is Phase E and has not been exercised on hardware.
+- `Inter` and `SpaceGrotesk` are bundled as variable fonts registered without per-weight assets, so bold is synthesised. Google Fonts' static instances were not retrievable; if exact weights matter, add `Inter-SemiBold.ttf` etc. and declare them.
+- Hindi UI localisation remains out of scope.
+- Web dashboard (overlay geometry, assign modal, queue polling) untouched — Phase D.

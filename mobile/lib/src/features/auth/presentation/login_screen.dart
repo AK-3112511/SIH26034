@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../core/constants/api_constants.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/widgets/calibration_tick_rule.dart';
 import '../../scans/presentation/home_screen.dart';
@@ -12,9 +12,15 @@ import '../data/auth_service.dart';
 class LoginScreen extends StatefulWidget {
   final AuthService? authService;
 
+  /// When hosted by `AuthGate` the gate swaps the root widget on sign-in, so
+  /// this screen must not also push a route. Standalone use (and widget tests)
+  /// keeps the default navigation.
+  final bool navigateOnSuccess;
+
   const LoginScreen({
     super.key,
     this.authService,
+    this.navigateOnSuccess = true,
   });
 
   @override
@@ -37,6 +43,13 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _auth = widget.authService ?? AuthService();
+    // Explain an involuntary return to this screen (expired or revoked token)
+    // rather than leaving the officer to guess why they were signed out.
+    final reason = _auth.sessionEndedReason;
+    if (reason != null) {
+      _errorMessage = reason;
+      _auth.clearSessionEndedReason();
+    }
   }
 
   @override
@@ -46,17 +59,8 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleOfflineLogin() {
-    _auth.loginOffline(username: _usernameController.text);
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => const HomeScreen(),
-      ),
-    );
-  }
-
   void _showServerConfigDialog() {
-    final urlController = TextEditingController(text: ApiConstants.baseUrl);
+    final urlController = TextEditingController(text: AppConfig().baseUrl);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -95,11 +99,15 @@ class _LoginScreenState extends State<LoginScreen> {
             style: ElevatedButton.styleFrom(
               minimumSize: const Size(100, 40),
             ),
-            onPressed: () {
-              setState(() {
-                ApiConstants.baseUrl = urlController.text.trim();
-              });
+            onPressed: () async {
+              final error = await AppConfig().setBaseUrl(urlController.text);
+              if (!ctx.mounted) return;
+              if (error != null) {
+                ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(error)));
+                return;
+              }
               Navigator.of(ctx).pop();
+              if (mounted) setState(() {});
             },
             child: const Text('SAVE'),
           ),
@@ -134,11 +142,13 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     if (result.isSuccess) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const HomeScreen(),
-        ),
-      );
+      if (widget.navigateOnSuccess) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => const HomeScreen(),
+          ),
+        );
+      }
     } else {
       setState(() {
         _errorMessage = result.errorMessage ?? 'Authentication failed';
@@ -220,7 +230,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Signature Calibration Tick Rule divider
                 const CalibrationTickRule(),
 
-                // Offline Notice Banner (displayed if network is offline or unreachable)
+                // Offline notice. Informational only: there is no way past
+                // this screen without credentials the server has accepted, so
+                // captures can always be attributed to a real officer.
                 if (_showOfflineNotice) ...[
                   Container(
                     width: double.infinity,
@@ -247,7 +259,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'OFFLINE MODE NOTICE',
+                                'SERVER UNREACHABLE',
                                 style: AppTypography.xs.copyWith(
                                   color: AppColors.verdictPending,
                                   fontWeight: FontWeight.bold,
@@ -255,7 +267,10 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               const SizedBox(height: AppSpacing.space05),
                               Text(
-                                'Central server is unreachable. You can continue field inspection in offline mode.',
+                                'Check the server address below and your network. '
+                                'Once you have signed in on this device, you can keep '
+                                'capturing offline and everything uploads when you '
+                                'are back in range.',
                                 style: AppTypography.xs.copyWith(
                                   color: AppColors.ink900,
                                 ),
@@ -263,20 +278,20 @@ class _LoginScreenState extends State<LoginScreen> {
                               const SizedBox(height: AppSpacing.space1),
                               OutlinedButton.icon(
                                 style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppColors.verdictPending,
-                                  side: const BorderSide(color: AppColors.verdictPending),
-                                  minimumSize: const Size(160, 36),
+                                  foregroundColor: AppColors.ink900,
+                                  side: const BorderSide(color: AppColors.ink600),
+                                  minimumSize: const Size(160, 48),
                                   padding: const EdgeInsets.symmetric(horizontal: AppSpacing.space1),
                                 ),
-                                icon: const Icon(Icons.offline_bolt_outlined, size: 16.0),
+                                icon: const Icon(Icons.dns_outlined, size: 16.0),
                                 label: Text(
-                                  'ENTER OFFLINE FIELD MODE',
+                                  'CHANGE SERVER ADDRESS',
                                   style: AppTypography.xs.copyWith(
                                     fontWeight: FontWeight.bold,
-                                    color: AppColors.verdictPending,
+                                    color: AppColors.ink900,
                                   ),
                                 ),
-                                onPressed: _handleOfflineLogin,
+                                onPressed: _showServerConfigDialog,
                               ),
                             ],
                           ),
@@ -437,30 +452,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               : const Text('AUTHENTICATE & ENTER FIELD MODE'),
                         ),
 
-                        // Offline fallback button when server connection fails
-                        if (_showOfflineNotice || _errorMessage != null) ...[
-                          const SizedBox(height: AppSpacing.space2),
-                          OutlinedButton.icon(
-                            icon: const Icon(
-                              Icons.offline_bolt_outlined,
-                              color: AppColors.verdictPending,
-                            ),
-                            label: Text(
-                              'CONTINUE IN OFFLINE FIELD MODE',
-                              style: AppTypography.base.copyWith(
-                                color: AppColors.ink900,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(
-                                color: AppColors.verdictPending,
-                                width: 1.5,
-                              ),
-                            ),
-                            onPressed: _handleOfflineLogin,
-                          ),
-                        ],
                       ],
                     ),
                   ),

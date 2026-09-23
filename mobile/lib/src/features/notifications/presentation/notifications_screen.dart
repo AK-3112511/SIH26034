@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/widgets/calibration_tick_rule.dart';
+import '../../../core/database/database_helper.dart';
+import '../../scans/models/capture_record.dart';
+import '../../scans/presentation/scan_detail_screen.dart';
 import '../../scans/presentation/sync_queue_screen.dart';
 import '../models/notification_item.dart';
 
@@ -99,19 +102,55 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  void _handleNotificationTap(NotificationItem item) {
+  Future<void> _handleNotificationTap(NotificationItem item) async {
     if (_localNotifications != null) {
       setState(() {
         item.isRead = true;
       });
     } else {
-      _notificationService.markAsRead(item.id);
+      await _notificationService.markAsRead(item.id);
     }
 
-    if (item.deepLinkRoute == '/sync-queue') {
+    final route = item.deepLinkRoute;
+    if (route == null) return;
+
+    if (route == '/sync-queue') {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SyncQueueScreen()),
+      );
+      return;
+    }
+
+    if (route.startsWith('/scans/')) {
+      // The alert carries the server's scan id; the detail screen reads the
+      // local row, so resolve one to the other before navigating.
+      final serverScanId = route.substring('/scans/'.length);
+      CaptureRecord? capture;
+      try {
+        capture = await DatabaseHelper().getCaptureByServerScanId(serverScanId);
+      } catch (e) {
+        debugPrint('[Notifications] Could not resolve deep link $route: $e');
+      }
+
+      if (!mounted) return;
+      if (capture == null) {
+        // The scan belongs to someone else's device, or its local row was
+        // discarded. Say so rather than opening an empty screen.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This scan is not stored on this device. Open it on the dashboard.'),
+          ),
+        );
+        return;
+      }
+
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => const SyncQueueScreen(),
+          builder: (_) => ScanDetailScreen(
+            localId: capture!.localId,
+            initialRecord: capture,
+          ),
         ),
       );
     }

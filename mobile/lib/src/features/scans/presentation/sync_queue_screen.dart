@@ -6,6 +6,7 @@ import '../../../core/widgets/calibration_tick_rule.dart';
 import '../../../core/widgets/status_chip.dart';
 import '../models/capture_record.dart';
 import '../services/sync_worker.dart';
+import '../../../core/utils/short_id.dart';
 
 /// Sync Queue Screen (Mobile UX §2, Screen 6)
 ///
@@ -129,7 +130,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
       SnackBar(
         backgroundColor: AppColors.ink900,
         content: Text(
-          'Force sync triggered for ${record.localId.substring(0, 8).toUpperCase()}',
+          'Force sync triggered for ${shortId(record.localId)}',
           style: AppTypography.xs.copyWith(color: AppColors.paper000),
         ),
       ),
@@ -143,7 +144,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
         backgroundColor: AppColors.paper000,
         title: const Text('Discard Stuck Capture?', style: AppTypography.lg),
         content: Text(
-          'Are you sure you want to discard capture #${record.localId.substring(0, 8).toUpperCase()}? The local evidence photo will be deleted.',
+          'Are you sure you want to discard capture #${shortId(record.localId)}? The local evidence photo will be deleted.',
           style: AppTypography.xs.copyWith(color: AppColors.ink900),
         ),
         actions: [
@@ -180,7 +181,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
           backgroundColor: AppColors.ink900,
           duration: const Duration(seconds: 1),
           content: Text(
-            'Capture #${record.localId.substring(0, 8).toUpperCase()} discarded.',
+            'Capture #${shortId(record.localId)} discarded.',
             style: AppTypography.xs.copyWith(color: AppColors.paper000),
           ),
         ),
@@ -354,7 +355,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
   }
 
   Widget _buildRegularQueueCard(CaptureRecord record) {
-    final localIdShort = record.localId.substring(0, 8).toUpperCase();
+    final localIdShort = shortId(record.localId);
     final isUploading = record.syncStatus.toUpperCase() == 'UPLOADING';
 
     return Card(
@@ -389,9 +390,18 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
             ),
             const SizedBox(height: AppSpacing.space1),
             Text(
-              'Type: ${record.referenceObjectType.toUpperCase()} • Captured: ${record.capturedAtUtc.substring(11, 16)} UTC',
+              'Reference: ${record.referenceObjectType.replaceAll('_', ' ')} • Captured: ${_capturedAtLabel(record.capturedAtUtc)}',
               style: AppTypography.xs.copyWith(color: AppColors.ink600),
             ),
+            if (record.lastError != null && record.lastError!.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.space1),
+              // Name the actual obstacle. "Failed" alone leaves an officer with
+              // nothing to act on.
+              Text(
+                record.lastError!,
+                style: AppTypography.xs.copyWith(color: AppColors.verdictPending),
+              ),
+            ],
             const SizedBox(height: AppSpacing.space1),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -433,7 +443,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
 
   /// Distinct Stuck Capture Card (§3.1: retry_count > 10 notify_user("photo stuck, check manually"))
   Widget _buildStuckCard(CaptureRecord record) {
-    final localIdShort = record.localId.substring(0, 8).toUpperCase();
+    final localIdShort = shortId(record.localId);
 
     return Container(
       decoration: BoxDecoration(
@@ -494,7 +504,8 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
               borderRadius: BorderRadius.circular(AppRadius.card),
             ),
             child: Text(
-              '⚠️ Automatic background sync suspended (§3.1). Upload failed 10+ times. File may be damaged or rejected by server.',
+              'Automatic upload has stopped for this capture after 10 failed attempts. '
+              'Retry it, or discard it and re-inspect the product.',
               style: AppTypography.xs.copyWith(
                 color: AppColors.ink900,
                 fontWeight: FontWeight.w500,
@@ -503,9 +514,16 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
           ),
           const SizedBox(height: AppSpacing.space1),
           Text(
-            'Target Type: ${record.referenceObjectType.toUpperCase()} • Retries: ${record.retryCount}',
+            'Reference: ${record.referenceObjectType.replaceAll('_', ' ')} • Attempts: ${record.retryCount}',
             style: AppTypography.xs.copyWith(color: AppColors.ink600),
           ),
+          if (record.lastError != null && record.lastError!.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.space05),
+            Text(
+              'Last error: ${record.lastError!}',
+              style: AppTypography.xs.copyWith(color: AppColors.ink600),
+            ),
+          ],
           const SizedBox(height: AppSpacing.space1),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -538,4 +556,15 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
       ),
     );
   }
+
+  /// Local capture time, or the raw value if it cannot be parsed. Previously a
+  /// bare `substring(11, 16)`, which threw on any unexpected timestamp.
+  static String _capturedAtLabel(String capturedAtUtc) {
+    final parsed = DateTime.tryParse(capturedAtUtc);
+    if (parsed == null) return capturedAtUtc;
+    final local = parsed.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${two(local.hour)}:${two(local.minute)}';
+  }
+
 }

@@ -21,32 +21,9 @@ void main() {
 
   setUp(() async {
     db = await databaseFactory.openDatabase(inMemoryDatabasePath);
-    await db.execute('''
-      CREATE TABLE captures (
-        local_id TEXT PRIMARY KEY,
-        image_path TEXT,
-        lat REAL,
-        lng REAL,
-        captured_at_utc TEXT,
-        reference_object_type TEXT,
-        sync_status TEXT,
-        retry_count INTEGER DEFAULT 0,
-        server_scan_id TEXT
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS assigned_tasks (
-        scan_id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        category TEXT NOT NULL,
-        platform TEXT,
-        location TEXT,
-        assigned_at_utc TEXT,
-        task_type TEXT,
-        status TEXT,
-        instructions TEXT
-      )
-    ''');
+    // Use the app's own schema rather than a copy, so a migration that misses
+    // a column fails here instead of on a field officer's handset.
+    await DatabaseHelper.createSchema(db);
 
     dbHelper = DatabaseHelper();
     dbHelper.setDatabase(db);

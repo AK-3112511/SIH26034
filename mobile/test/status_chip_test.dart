@@ -38,7 +38,7 @@ void main() {
 
       final container = tester.widget<Container>(find.byType(Container));
       final decoration = container.decoration as BoxDecoration;
-      expect(decoration.border?.top.color, AppColors.verdictPending);
+      expect(decoration.border?.top.color, AppColors.ink600);
     });
 
     testWidgets('renders Failed status chip with correct color and label', (tester) async {
@@ -50,12 +50,13 @@ void main() {
         ),
       );
 
-      expect(find.text('Failed'), findsOneWidget);
+      expect(find.text('Upload failed'), findsOneWidget);
       expect(find.byIcon(Icons.error_outline), findsOneWidget);
 
       final container = tester.widget<Container>(find.byType(Container));
       final decoration = container.decoration as BoxDecoration;
-      expect(decoration.border?.top.color, AppColors.verdictFail);
+      // Verdict red is reserved for compliance seals; a failed upload is amber.
+      expect(decoration.border?.top.color, AppColors.verdictPending);
     });
   });
 }
